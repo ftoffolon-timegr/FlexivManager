@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RobotGateway.Core/RobotGateway.Core.csproj" />
+    <Project Path="src/RobotGateway.Mock/RobotGateway.Mock.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RobotGateway.Tests/RobotGateway.Tests.csproj" />
+  </Folder>
+  <Project Path="FlexivManager.csproj" />
+</Solution>

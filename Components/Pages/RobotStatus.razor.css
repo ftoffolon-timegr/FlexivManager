@@ -1,0 +1,22 @@
+.robot-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.robot-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
+}
+
+.num td {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.events ul {
+    max-height: 18rem;
+    overflow-y: auto;
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- The host lives in the solution root: keep the library/test folders out of its globs. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="src\RobotGateway.Core\RobotGateway.Core.csproj" />
+    <ProjectReference Include="src\RobotGateway.Mock\RobotGateway.Mock.csproj" />
+  </ItemGroup>
+
+</Project>

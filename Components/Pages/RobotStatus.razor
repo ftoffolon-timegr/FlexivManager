@@ -1,0 +1,191 @@
+@page "/robot"
+@using RobotGateway.Core
+@implements IAsyncDisposable
+@inject SnapshotStore Store
+@inject EventLog Events
+
+<PageTitle>Robot status</PageTitle>
+
+<h1>Robot status</h1>
+
+@{
+    var s = _snapshot;
+}
+
+<div class="robot-header">
+    <span class="badge fs-6 @StateClass(s.State)">@StateLabel(s.State)</span>
+    <span class="text-muted small">
+        Backend: <b>@s.BackendName</b> · seq @s.Sequence · @s.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff") · loop @s.LoopRateHz.ToString("0") Hz
+    </span>
+</div>
+
+@if (s.LastError is not null)
+{
+    <div class="alert alert-warning py-1 small mt-2">@s.LastError</div>
+}
+
+<div class="robot-grid mt-3">
+    <section class="card">
+        <div class="card-header">Status</div>
+        <table class="table table-sm mb-0">
+            <tbody>
+                <tr><th>Connected</th><td>@YesNo(s.Status.Connected)</td></tr>
+                <tr><th>Operational</th><td>@YesNo(s.Status.Operational)</td></tr>
+                <tr><th>Operational status</th><td>@s.Status.OperationalStatus</td></tr>
+                <tr><th>Mode</th><td>@s.Status.Mode</td></tr>
+                <tr><th>Busy</th><td>@YesNo(s.Status.Busy)</td></tr>
+                <tr><th>Fault</th><td class="@(s.Status.Fault ? "text-danger fw-bold" : "")">@YesNo(s.Status.Fault)</td></tr>
+                <tr><th>E-stop released</th><td class="@(s.Status.Connected && !s.Status.EStopReleased ? "text-danger fw-bold" : "")">@YesNo(s.Status.EStopReleased)</td></tr>
+                <tr><th>Plan</th><td>@(s.CurrentPlan ?? "-") @(s.Plan is { NodeName.Length: > 0 } p ? $"({p.NodeName})" : "")</td></tr>
+                <tr><th>Cycles</th><td>@s.CompletedCycles @(s.LastCycleTime is { } t ? $"· last {t.TotalSeconds:0.0} s" : "")</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="card">
+        <div class="card-header">Joints</div>
+        @if (s.States is { } st)
+        {
+            <table class="table table-sm mb-0 num">
+                <thead><tr><th>#</th><th>q [deg]</th><th>dq [deg/s]</th><th>tau [Nm]</th><th>T [°C]</th></tr></thead>
+                <tbody>
+                    @for (var i = 0; i < st.Q.Length; i++)
+                    {
+                        <tr>
+                            <td>J@(i + 1)</td>
+                            <td>@Deg(st.Q[i]).ToString("0.00")</td>
+                            <td>@Deg(st.Dq[i]).ToString("0.0")</td>
+                            <td>@st.Tau[i].ToString("0.0")</td>
+                            <td>@st.Temperature[i].ToString("0.0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else
+        {
+            <div class="card-body text-muted">No data (not connected).</div>
+        }
+    </section>
+
+    <section class="card">
+        <div class="card-header">TCP pose (world)</div>
+        @if (s.States is { } st2)
+        {
+            var pose = st2.TcpPose;
+            var w = st2.ExtWrenchInTcp;
+            <table class="table table-sm mb-0 num">
+                <tbody>
+                    <tr><th>x / y / z [mm]</th><td>@((pose[0] * 1000).ToString("0.0"))</td><td>@((pose[1] * 1000).ToString("0.0"))</td><td>@((pose[2] * 1000).ToString("0.0"))</td></tr>
+                    <tr><th>qw / qx</th><td>@pose[3].ToString("0.000")</td><td>@pose[4].ToString("0.000")</td><td></td></tr>
+                    <tr><th>qy / qz</th><td>@pose[5].ToString("0.000")</td><td>@pose[6].ToString("0.000")</td><td></td></tr>
+                    <tr><th>F [N]</th><td>@w[0].ToString("0.0")</td><td>@w[1].ToString("0.0")</td><td>@w[2].ToString("0.0")</td></tr>
+                    <tr><th>M [Nm]</th><td>@w[3].ToString("0.00")</td><td>@w[4].ToString("0.00")</td><td>@w[5].ToString("0.00")</td></tr>
+                </tbody>
+            </table>
+        }
+        else
+        {
+            <div class="card-body text-muted">No data (not connected).</div>
+        }
+    </section>
+
+    <section class="card events">
+        <div class="card-header">Events</div>
+        <ul class="list-unstyled small mb-0 p-2">
+            @foreach (var e in _events.Reverse())
+            {
+                <li class="@EventClass(e.Level)">
+                    <span class="text-muted">@e.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                    [@e.Source] @e.Message
+                </li>
+            }
+        </ul>
+    </section>
+</div>
+
+@code {
+    // UI refresh rate, independent of the worker loop rate.
+    private static readonly TimeSpan RefreshPeriod = TimeSpan.FromMilliseconds(200);
+
+    private RobotSnapshot _snapshot = RobotSnapshot.Initial;
+    private IReadOnlyList<RobotEvent> _events = [];
+    private long _eventsVersion = -1;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _refreshLoop;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _refreshLoop = RefreshLoopAsync();
+    }
+
+    private async Task RefreshLoopAsync()
+    {
+        using var timer = new PeriodicTimer(RefreshPeriod);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                if (Refresh())
+                    await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <returns>True when something changed since the last render.</returns>
+    private bool Refresh()
+    {
+        var changed = false;
+        var current = Store.Current;
+        if (current.Sequence != _snapshot.Sequence)
+        {
+            _snapshot = current;
+            changed = true;
+        }
+        var version = Events.Version;
+        if (version != _eventsVersion)
+        {
+            _eventsVersion = version;
+            _events = Events.GetRecent(20);
+            changed = true;
+        }
+        return changed;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        if (_refreshLoop is not null)
+            await _refreshLoop;
+        _cts.Dispose();
+    }
+
+    private static double Deg(double rad) => rad * 180.0 / Math.PI;
+
+    private static string YesNo(bool value) => value ? "yes" : "no";
+
+    private static string StateLabel(RobotServiceState state) => state switch
+    {
+        RobotServiceState.EStop => "E-STOP",
+        _ => state.ToString().ToUpperInvariant(),
+    };
+
+    private static string StateClass(RobotServiceState state) => state switch
+    {
+        RobotServiceState.Disconnected => "text-bg-secondary",
+        RobotServiceState.Connected => "text-bg-info",
+        RobotServiceState.Operational => "text-bg-success",
+        RobotServiceState.Running => "text-bg-primary",
+        RobotServiceState.Paused => "text-bg-warning",
+        _ => "text-bg-danger",
+    };
+
+    private static string EventClass(EventLevel level) => level switch
+    {
+        EventLevel.Error => "text-danger",
+        EventLevel.Warning => "text-warning-emphasis",
+        _ => "",
+    };
+}
