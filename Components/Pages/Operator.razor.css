@@ -1,0 +1,13 @@
+.operator-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 1rem;
+}
+
+.programs {
+    grid-column: 1 / -1;
+}
+
+.velocity {
+    width: 7rem;
+}

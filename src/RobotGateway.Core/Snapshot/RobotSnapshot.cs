@@ -15,6 +15,7 @@ public sealed record RobotSnapshot
     public RobotStates? States { get; init; }
     public PlanInfo? Plan { get; init; }
     public string? CurrentPlan { get; init; }
+    public DateTimeOffset? CurrentPlanStartedAt { get; init; }
     public ImmutableArray<string> AvailablePlans { get; init; } = [];
     public long CompletedCycles { get; init; }
     public TimeSpan? LastCycleTime { get; init; }

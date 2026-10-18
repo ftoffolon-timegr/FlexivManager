@@ -1,0 +1,56 @@
+{
+  // Work programs the operator is allowed to run. Only plans listed here can be started.
+  // planName must match the plan name in Flexiv Elements; maxVelocityScale is enforced server-side.
+  "schemaVersion": 1,
+  "programs": [
+    {
+      "id": "pick-place",
+      "name": "Pick & place",
+      "description": "Pick from the tray, place on the fixture.",
+      "kind": "ElementsPlan",
+      "planName": "PLAN-PickPlace",
+      "velocityScale": 50,
+      "maxVelocityScale": 80,
+      "author": "fabio"
+    },
+    {
+      "id": "polish",
+      "name": "Polishing",
+      "description": "Force-controlled polishing pattern.",
+      "kind": "ElementsPlan",
+      "planName": "PLAN-Polish",
+      "velocityScale": 30,
+      "maxVelocityScale": 50,
+      "author": "fabio"
+    },
+    {
+      "id": "home",
+      "name": "Go home",
+      "kind": "ElementsPlan",
+      "planName": "PLAN-Home",
+      "velocityScale": 20,
+      "maxVelocityScale": 50,
+      "author": "fabio"
+    },
+    {
+      "id": "fault-demo",
+      "name": "Fault demo (mock only)",
+      "description": "Raises a simulated collision after 3 s.",
+      "kind": "ElementsPlan",
+      "planName": "PLAN-FaultDemo",
+      "velocityScale": 100,
+      "maxVelocityScale": 100,
+      "author": "fabio"
+    },
+    {
+      "id": "deburr",
+      "name": "Deburring",
+      "description": "Not on the mock robot: shown as missing.",
+      "kind": "ElementsPlan",
+      "planName": "PLAN-Deburr",
+      "velocityScale": 40,
+      "maxVelocityScale": 60,
+      "author": "fabio"
+    }
+  ]
+}

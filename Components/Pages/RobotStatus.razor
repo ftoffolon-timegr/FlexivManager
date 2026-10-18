@@ -13,7 +13,7 @@
 }
 
 <div class="robot-header">
-    <span class="badge fs-6 @StateClass(s.State)">@StateLabel(s.State)</span>
+    <span class="badge fs-6 @RobotStateStyle.BadgeClass(s.State)">@RobotStateStyle.Label(s.State)</span>
     <span class="text-muted small">
         Backend: <b>@s.BackendName</b> · seq @s.Sequence · @s.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff") · loop @s.LoopRateHz.ToString("0") Hz
     </span>
@@ -165,22 +165,6 @@
     private static double Deg(double rad) => rad * 180.0 / Math.PI;
 
     private static string YesNo(bool value) => value ? "yes" : "no";
-
-    private static string StateLabel(RobotServiceState state) => state switch
-    {
-        RobotServiceState.EStop => "E-STOP",
-        _ => state.ToString().ToUpperInvariant(),
-    };
-
-    private static string StateClass(RobotServiceState state) => state switch
-    {
-        RobotServiceState.Disconnected => "text-bg-secondary",
-        RobotServiceState.Connected => "text-bg-info",
-        RobotServiceState.Operational => "text-bg-success",
-        RobotServiceState.Running => "text-bg-primary",
-        RobotServiceState.Paused => "text-bg-warning",
-        _ => "text-bg-danger",
-    };
 
     private static string EventClass(EventLevel level) => level switch
     {

@@ -9,7 +9,7 @@ public enum ProgramKind
     PrimitiveSequence,
 }
 
-/// <summary>Catalog entry for a work program. Persistence (ProgramStore) comes in a later step.</summary>
+/// <summary>Catalog entry for a work program. Only programs in the catalog can be run.</summary>
 public sealed record WorkProgram
 {
     public required string Id { get; init; }
@@ -20,7 +20,12 @@ public sealed record WorkProgram
     /// <summary>Robot-side plan name, for <see cref="ProgramKind.ElementsPlan"/>.</summary>
     public string? PlanName { get; init; }
 
+    /// <summary>Velocity scale proposed to the operator [%].</summary>
     public int VelocityScale { get; init; } = 100;
+
+    /// <summary>Upper limit the operator cannot exceed for this program [%], enforced server-side.</summary>
+    public int MaxVelocityScale { get; init; } = 100;
+
     public int Version { get; init; } = 1;
     public string? Author { get; init; }
     public DateTimeOffset CreatedAt { get; init; }

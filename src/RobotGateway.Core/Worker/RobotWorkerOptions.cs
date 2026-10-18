@@ -17,4 +17,10 @@ public sealed class RobotWorkerOptions
     public TimeSpan ReconnectInterval { get; set; } = TimeSpan.FromSeconds(3);
 
     public TimeSpan DefaultCommandTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>Validity of a motion confirmation token (request -> confirm).</summary>
+    public TimeSpan ConfirmationTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>Program catalog file, relative to the content root.</summary>
+    public string CatalogPath { get; set; } = "programs.json";
 }

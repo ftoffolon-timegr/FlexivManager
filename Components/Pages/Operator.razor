@@ -1,0 +1,314 @@
+@page "/operator"
+@using RobotGateway.Core
+@implements IAsyncDisposable
+@inject IServiceProvider Services
+@inject SnapshotStore Store
+@inject IProgramCatalog Catalog
+@inject TimeProvider Time
+
+<PageTitle>Operator</PageTitle>
+
+<h1>Operator</h1>
+
+@if (_commands is null)
+{
+    <div class="alert alert-info">
+        <i class="bi bi-eye" aria-hidden="true"></i>
+        Read-only host: robot commands are available only on the operator station.
+    </div>
+}
+
+@{
+    var s = _snapshot;
+    var canCommand = _commands is not null && !_busy;
+}
+
+<div class="operator-grid">
+    @* ---- Robot lifecycle ---- *@
+    <section class="card">
+        <div class="card-header">Robot</div>
+        <div class="card-body">
+            <p class="mb-2">
+                <span class="badge fs-6 @RobotStateStyle.BadgeClass(s.State)">@RobotStateStyle.Label(s.State)</span>
+                <span class="text-muted small ms-2">@s.Status.OperationalStatus · mode @s.Status.Mode</span>
+            </p>
+            @if (s.LastError is not null)
+            {
+                <div class="alert alert-warning py-1 small">@s.LastError</div>
+            }
+            @if (_commands is not null)
+            {
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-secondary" disabled="@(!canCommand || !Allowed(new ConnectCommand()))"
+                            @onclick="() => Run(c => c.ConnectAsync(Source))">
+                        <i class="bi bi-plug" aria-hidden="true"></i> Connect
+                    </button>
+                    <button class="btn btn-outline-success" disabled="@(!canCommand || !Allowed(new EnableCommand()))"
+                            @onclick="() => Run(c => c.EnableAsync(Source))">
+                        <i class="bi bi-power" aria-hidden="true"></i> Enable
+                    </button>
+                    <button class="btn btn-outline-warning" disabled="@(!canCommand || !Allowed(new ClearFaultCommand()))"
+                            @onclick="() => Run(c => c.ClearFaultAsync(Source))">
+                        <i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Clear fault
+                    </button>
+                </div>
+            }
+            @if (_lastResult is not null)
+            {
+                <div class="small mt-2 @(_lastResultOk ? "text-success" : "text-danger")">@_lastResult</div>
+            }
+        </div>
+    </section>
+
+    @* ---- Execution ---- *@
+    <section class="card">
+        <div class="card-header">Execution</div>
+        <div class="card-body">
+            @if (s.State is RobotServiceState.Running or RobotServiceState.Paused)
+            {
+                <dl class="row mb-2">
+                    <dt class="col-4">Plan</dt><dd class="col-8">@s.CurrentPlan</dd>
+                    <dt class="col-4">Node</dt><dd class="col-8">@(string.IsNullOrEmpty(s.Plan?.NodeName) ? "-" : s.Plan.NodeName)</dd>
+                    <dt class="col-4">Elapsed</dt><dd class="col-8">@Elapsed(s)</dd>
+                    <dt class="col-4">Velocity</dt><dd class="col-8">@(s.Plan?.VelocityScale ?? 0) %</dd>
+                </dl>
+            }
+            else
+            {
+                <p class="text-muted">No plan running.</p>
+            }
+            <p class="small text-muted mb-2">
+                Cycles completed: @s.CompletedCycles
+                @if (s.LastCycleTime is { } t)
+                {
+                    <span>· last @t.TotalSeconds.ToString("0.0") s</span>
+                }
+            </p>
+            @if (_commands is not null)
+            {
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <button class="btn btn-outline-warning" disabled="@(!canCommand || !Allowed(new PausePlanCommand()))"
+                            @onclick="() => Run(c => c.PausePlanAsync(Source))">
+                        <i class="bi bi-pause-fill" aria-hidden="true"></i> Pause
+                    </button>
+                    <button class="btn btn-outline-primary" disabled="@(!canCommand || !Allowed(new ResumePlanCommand()))"
+                            @onclick="RequestResume">
+                        <i class="bi bi-play-fill" aria-hidden="true"></i> Resume…
+                    </button>
+                    <button class="btn btn-outline-danger" disabled="@(!canCommand || !Allowed(new StopPlanCommand()))"
+                            @onclick="() => Run(c => c.StopPlanAsync(Source))">
+                        <i class="bi bi-skip-end-fill" aria-hidden="true"></i> Stop plan
+                    </button>
+                    <StopButton Source="operator-page" />
+                </div>
+            }
+        </div>
+    </section>
+
+    @* ---- Programs ---- *@
+    <section class="card programs">
+        <div class="card-header">Programs</div>
+        @if (Catalog.Errors.Count > 0)
+        {
+            <div class="alert alert-warning small m-2 mb-0">
+                @foreach (var error in Catalog.Errors)
+                {
+                    <div>@error</div>
+                }
+            </div>
+        }
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr><th>Program</th><th>Plan</th><th>On robot</th><th class="velocity">Velocity %</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in Catalog.Programs)
+                    {
+                        var onRobot = s.AvailablePlans.Contains(p.PlanName!);
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">@p.Name</div>
+                                <div class="small text-muted">@p.Description</div>
+                            </td>
+                            <td><code>@p.PlanName</code></td>
+                            <td>
+                                @if (onRobot)
+                                {
+                                    <i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><span class="visually-hidden">yes</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-secondary">missing</span>
+                                }
+                            </td>
+                            <td>
+                                <input type="number" class="form-control form-control-sm" min="1" max="@p.MaxVelocityScale"
+                                       @bind="_scales[p.Id]" disabled="@(_commands is null)" />
+                                <div class="small text-muted">max @p.MaxVelocityScale</div>
+                            </td>
+                            <td class="text-end">
+                                @if (_commands is not null)
+                                {
+                                    <button class="btn btn-sm btn-primary"
+                                            disabled="@(!canCommand || !onRobot || s.State != RobotServiceState.Operational)"
+                                            @onclick="() => RequestRun(p)">
+                                        <i class="bi bi-play-circle" aria-hidden="true"></i> Run…
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+@* ---- Motion confirmation dialog (in-page, no JS confirm()) ---- *@
+@if (_pending is not null)
+{
+    var remaining = _pending.ExpiresAt - Time.GetUtcNow();
+    var expired = remaining <= TimeSpan.Zero;
+    <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-warning">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="confirm-title">
+                        <i class="bi bi-exclamation-triangle-fill text-warning" aria-hidden="true"></i> Confirm robot motion
+                    </h5>
+                </div>
+                <div class="modal-body">
+                    <p class="fw-semibold">@_pending.Summary</p>
+                    <p class="small mb-1">The robot will move. Check that the work cell is clear and the hardware emergency stop is within reach.</p>
+                    <p class="small text-muted mb-0">
+                        @(expired ? "Confirmation expired: close and request again." : $"Expires in {Math.Ceiling(remaining.TotalSeconds):0} s.")
+                    </p>
+                </div>
+                <div class="modal-footer justify-content-between">
+                    @* STOP stays reachable while the dialog covers the page. *@
+                    <StopButton Source="operator-confirm-dialog" />
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-secondary" @onclick="CancelPending">Cancel</button>
+                        <button class="btn btn-warning" disabled="@(expired || _busy)" @onclick="ConfirmPending">
+                            <i class="bi bi-play-fill" aria-hidden="true"></i> Confirm and move
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+}
+
+@code {
+    private const string Source = "operator-page";
+    private static readonly TimeSpan RefreshPeriod = TimeSpan.FromMilliseconds(200);
+
+    private RobotCommandService? _commands;
+    private RobotSnapshot _snapshot = RobotSnapshot.Initial;
+    private readonly Dictionary<string, int> _scales = new();
+    private ConfirmationRequest? _pending;
+    private bool _busy;
+    private string? _lastResult;
+    private bool _lastResultOk;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _refreshLoop;
+
+    protected override void OnInitialized()
+    {
+        _commands = Services.GetService<RobotCommandService>();
+        foreach (var p in Catalog.Programs)
+            _scales[p.Id] = p.VelocityScale;
+        _snapshot = Store.Current;
+        _refreshLoop = RefreshLoopAsync();
+    }
+
+    private async Task RefreshLoopAsync()
+    {
+        using var timer = new PeriodicTimer(RefreshPeriod);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                var current = Store.Current;
+                // Re-render on new data, and every tick while the dialog shows its countdown.
+                if (current.Sequence != _snapshot.Sequence || _pending is not null)
+                {
+                    _snapshot = current;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private bool Allowed(RobotCommand command) => CommandPolicy.Check(_snapshot.State, command) is null;
+
+    private async Task Run(Func<RobotCommandService, Task<CommandResult>> action)
+    {
+        if (_commands is null) return;
+        _busy = true;
+        try { Show(await action(_commands)); }
+        finally { _busy = false; }
+    }
+
+    private void RequestRun(WorkProgram program)
+    {
+        if (_commands is null) return;
+        var request = _commands.RequestRunProgram(program.Id, _scales[program.Id], Source);
+        Open(request);
+    }
+
+    private void RequestResume()
+    {
+        if (_commands is null) return;
+        Open(_commands.RequestResume(Source));
+    }
+
+    private void Open(ConfirmationRequest request)
+    {
+        if (request.IsAccepted)
+            _pending = request;
+        else
+            Show(CommandResult.Rejected(request.Rejection!));
+    }
+
+    private async Task ConfirmPending()
+    {
+        if (_commands is null || _pending?.Token is not { } token) return;
+        _busy = true;
+        try
+        {
+            _pending = null;
+            Show(await _commands.ConfirmAsync(token, Source));
+        }
+        finally { _busy = false; }
+    }
+
+    private void CancelPending()
+    {
+        if (_pending?.Token is { } token)
+            _commands?.CancelConfirmation(token, Source);
+        _pending = null;
+    }
+
+    private void Show(CommandResult result)
+    {
+        _lastResultOk = result.IsSuccess;
+        _lastResult = result.IsSuccess ? "Command accepted." : $"{result.Outcome}: {result.Message}";
+    }
+
+    private string Elapsed(RobotSnapshot s) =>
+        s.CurrentPlanStartedAt is { } started ? $"{(Time.GetUtcNow() - started).TotalSeconds:0.0} s" : "-";
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_pending?.Token is { } token)
+            _commands?.CancelConfirmation(token, Source);
+        _cts.Cancel();
+        if (_refreshLoop is not null)
+            await _refreshLoop;
+        _cts.Dispose();
+    }
+}

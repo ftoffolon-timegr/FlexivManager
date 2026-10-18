@@ -19,22 +19,36 @@ public class CommandPolicyTests
     [InlineData(RobotServiceState.Paused)]
     [InlineData(RobotServiceState.Fault)]
     [InlineData(RobotServiceState.EStop)]
-    public void ExecutePlan_OnlyWhenOperational(RobotServiceState state) =>
-        Assert.NotNull(CommandPolicy.Check(state, new ExecutePlanCommand("P")));
+    public void RunPlan_OnlyWhenOperational(RobotServiceState state) =>
+        Assert.NotNull(CommandPolicy.Check(state, new RunPlanCommand("P", 50)));
 
     [Fact]
-    public void ExecutePlan_AllowedWhenOperational() =>
-        Assert.Null(CommandPolicy.Check(RobotServiceState.Operational, new ExecutePlanCommand("P")));
+    public void RunPlan_AllowedWhenOperational() =>
+        Assert.Null(CommandPolicy.Check(RobotServiceState.Operational, new RunPlanCommand("P", 50)));
 
     [Fact]
-    public void ExecutePlan_RequiresName() =>
-        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new ExecutePlanCommand(" ")));
+    public void RunPlan_RequiresName() =>
+        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new RunPlanCommand(" ", 50)));
 
     [Theory]
     [InlineData(0)]
     [InlineData(101)]
-    public void VelocityScale_OutOfRange_IsRejected(int percent) =>
+    public void VelocityScale_OutOfRange_IsRejected(int percent)
+    {
         Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new SetVelocityScaleCommand(percent)));
+        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new RunPlanCommand("P", percent)));
+    }
+
+    [Fact]
+    public void PauseResumeStopPlan_FollowExecutionState()
+    {
+        Assert.Null(CommandPolicy.Check(RobotServiceState.Running, new PausePlanCommand()));
+        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new PausePlanCommand()));
+        Assert.Null(CommandPolicy.Check(RobotServiceState.Paused, new ResumePlanCommand()));
+        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Running, new ResumePlanCommand()));
+        Assert.Null(CommandPolicy.Check(RobotServiceState.Paused, new StopPlanCommand()));
+        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new StopPlanCommand()));
+    }
 
     [Fact]
     public void Disconnect_RejectedWhileRunning() =>
@@ -50,7 +64,7 @@ public class CommandPolicyTests
     [Fact]
     public void MotionCommands_AreFlagged()
     {
-        Assert.True(new ExecutePlanCommand("P").IsMotion);
+        Assert.True(new RunPlanCommand("P", 50).IsMotion);
         Assert.True(new ResumePlanCommand().IsMotion);
         Assert.False(new StopCommand().IsMotion);
         Assert.False(new EnableCommand().IsMotion);

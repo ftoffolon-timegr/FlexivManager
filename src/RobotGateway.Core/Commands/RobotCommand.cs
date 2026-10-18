@@ -3,10 +3,16 @@ namespace RobotGateway.Core;
 /// <summary>Base type of every command sent to the worker.</summary>
 public abstract record RobotCommand
 {
-    /// <summary>True when executing the command can make the robot move.</summary>
+    /// <summary>
+    /// True when executing the command can make the robot move. Motion commands are accepted only
+    /// through the two-step confirmation of <see cref="RobotCommandService"/>.
+    /// </summary>
     public virtual bool IsMotion => false;
 
     public virtual string Name => GetType().Name.Replace("Command", "");
+
+    /// <summary>Human-readable description for logs and confirmation dialogs.</summary>
+    public virtual string Describe() => Name;
 }
 
 /// <summary>Highest priority: always accepted, flushes queued commands, stops motion and goes to IDLE.</summary>
@@ -24,9 +30,12 @@ public sealed record SwitchModeCommand(RobotMode Mode) : RobotCommand;
 
 public sealed record SetVelocityScaleCommand(int Percent) : RobotCommand;
 
-public sealed record ExecutePlanCommand(string PlanName) : RobotCommand
+/// <summary>Runs a plan stored on the robot (Flexiv Elements) at the given velocity scale.</summary>
+public sealed record RunPlanCommand(string PlanName, int VelocityScale) : RobotCommand
 {
     public override bool IsMotion => true;
+
+    public override string Describe() => $"Run plan '{PlanName}' at {VelocityScale} % velocity";
 }
 
 public sealed record PausePlanCommand : RobotCommand;
@@ -34,6 +43,8 @@ public sealed record PausePlanCommand : RobotCommand;
 public sealed record ResumePlanCommand : RobotCommand
 {
     public override bool IsMotion => true;
+
+    public override string Describe() => "Resume the paused plan";
 }
 
 public sealed record StopPlanCommand : RobotCommand;

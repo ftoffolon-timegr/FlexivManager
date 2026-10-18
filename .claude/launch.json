@@ -5,7 +5,7 @@
       "name": "FlexivManager",
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "FlexivManager.csproj", "--launch-profile", "http"],
-      "port": 5048
+      "port": 8081
     }
   ]
 }

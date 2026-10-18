@@ -25,8 +25,10 @@ public static class CommandPolicy
         SetVelocityScaleCommand => state is RobotServiceState.Disconnected or RobotServiceState.EStop
             ? $"SetVelocityScale not allowed in {state}."
             : null,
-        ExecutePlanCommand c when string.IsNullOrWhiteSpace(c.PlanName) => "Plan name is required.",
-        ExecutePlanCommand => Require(state, command, RobotServiceState.Operational),
+        RunPlanCommand c when string.IsNullOrWhiteSpace(c.PlanName) => "Plan name is required.",
+        RunPlanCommand c when c.VelocityScale is < MinVelocityScale or > MaxVelocityScale =>
+            $"Velocity scale must be within {MinVelocityScale}..{MaxVelocityScale} %.",
+        RunPlanCommand => Require(state, command, RobotServiceState.Operational),
         PausePlanCommand => Require(state, command, RobotServiceState.Running),
         ResumePlanCommand => Require(state, command, RobotServiceState.Paused),
         StopPlanCommand => state is RobotServiceState.Running or RobotServiceState.Paused

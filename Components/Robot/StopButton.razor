@@ -1,0 +1,39 @@
+@using RobotGateway.Core
+@inject IServiceProvider Services
+
+@* Software STOP. Rendered only where the command service exists (operator host); renders nothing on the
+   monitoring host. Never disabled, no confirmation. It does NOT replace the hardware emergency stop. *@
+@if (_commands is not null)
+{
+    <button type="button"
+            class="btn btn-danger fw-bold stop-button @CssClass"
+            title="Software STOP: stops the robot and switches it to IDLE. Does not replace the hardware emergency stop."
+            @onclick="StopAsync">
+        <i class="bi bi-stop-circle-fill" aria-hidden="true"></i> STOP
+    </button>
+    @if (_error is not null)
+    {
+        <span class="badge text-bg-danger ms-2" role="alert">@_error</span>
+    }
+}
+
+@code {
+    /// <summary>Recorded in the event log as the command source.</summary>
+    [Parameter] public string Source { get; set; } = "stop-button";
+
+    /// <summary>Extra CSS classes, e.g. "btn-lg w-100".</summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    private RobotCommandService? _commands;
+    private string? _error;
+
+    protected override void OnInitialized() =>
+        _commands = Services.GetService<RobotCommandService>();
+
+    private async Task StopAsync()
+    {
+        _error = null;
+        var result = await _commands!.StopAsync(Source);
+        _error = result.IsSuccess ? null : $"STOP {result.Outcome}: {result.Message}";
+    }
+}

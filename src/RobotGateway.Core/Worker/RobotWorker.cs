@@ -128,7 +128,7 @@ public sealed class RobotWorker(
         var result = command is StopCommand ? ExecuteStop() : Execute(command);
 
         var level = result.IsSuccess ? EventLevel.Info : EventLevel.Warning;
-        AddEvent(level, $"Command {command.Name}: {result.Outcome}{(result.Message is null ? "" : " - " + result.Message)}");
+        AddEvent(level, $"Command {command.Name} from {pending.Source}: {result.Outcome}{(result.Message is null ? "" : " - " + result.Message)}");
         pending.Complete(result);
     }
 
@@ -183,8 +183,8 @@ public sealed class RobotWorker(
                 case SetVelocityScaleCommand c:
                     backend.SetVelocityScale(c.Percent);
                     break;
-                case ExecutePlanCommand c:
-                    return ExecutePlan(c.PlanName);
+                case RunPlanCommand c:
+                    return RunPlan(c);
                 case PausePlanCommand:
                     backend.PausePlan(true);
                     _pauseLatched = true;
@@ -214,22 +214,23 @@ public sealed class RobotWorker(
         }
     }
 
-    private CommandResult ExecutePlan(string planName)
+    private CommandResult RunPlan(RunPlanCommand command)
     {
-        if (!_plans.Contains(planName))
+        if (!_plans.Contains(command.PlanName))
         {
             _plans = [.. backend.GetPlanList()];
-            if (!_plans.Contains(planName))
-                return CommandResult.Rejected($"Plan '{planName}' not found on the robot.");
+            if (!_plans.Contains(command.PlanName))
+                return CommandResult.Rejected($"Plan '{command.PlanName}' not found on the robot.");
         }
 
+        backend.SetVelocityScale(command.VelocityScale);
         // Plan execution requires NRT_PLAN_EXECUTION mode; switching mode does not move the robot.
         if (backend.Mode != RobotMode.NrtPlanExecution)
             backend.SwitchMode(RobotMode.NrtPlanExecution);
 
-        backend.ExecutePlan(planName, continueExec: false);
+        backend.ExecutePlan(command.PlanName, continueExec: false);
         _pauseLatched = false;
-        _currentPlan = planName;
+        _currentPlan = command.PlanName;
         _cycleStartedAt = time.GetUtcNow();
         return CommandResult.Ok();
     }
@@ -360,6 +361,7 @@ public sealed class RobotWorker(
             States = _states,
             Plan = _plan,
             CurrentPlan = _state is RobotServiceState.Running or RobotServiceState.Paused ? _currentPlan : null,
+            CurrentPlanStartedAt = _state is RobotServiceState.Running or RobotServiceState.Paused ? _cycleStartedAt : null,
             AvailablePlans = _plans,
             CompletedCycles = _completedCycles,
             LastCycleTime = _lastCycleTime,
