@@ -243,7 +243,9 @@ src/RobotGateway.Flexiv/
 
 ### 9.2 Corrispondenza `IRobotBackend` → RDK
 
-I nomi a destra seguono l'API RDK (C++/Python). I nomi esatti nel wrapper C# **sono da verificare** sul wrapper in uso.
+Wrapper ufficiale: <https://github.com/flexivrobotics/flexiv_rdk_csharp> (`csharp/FlexivRdk/Robot.cs`). I nomi a destra sono quelli di quel wrapper (che segue l'API C++). Vanno riverificati sulla versione effettivamente scelta.
+
+**Versione:** il CMake del repository indica RDK 1.9.3, ma lo script in `third_party` scarica flexiv_rdk v1.7. Le DLL native vanno ricompilate dal tag RDK che corrisponde al software del robot.
 
 | `IRobotBackend` | Chiamata RDK | Note |
 |-----------------|--------------|------|
@@ -251,7 +253,7 @@ I nomi a destra seguono l'API RDK (C++/Python). I nomi esatti nel wrapper C# **s
 | `Disconnect()` / `Dispose()` | rilascio dell'oggetto `Robot` | |
 | `IsConnected` | `connected()` | Non deve lanciare eccezioni |
 | `IsOperational`, `OperationalStatus` | `operational()`, `operational_status()` | Mappare l'enum completo in `Mapping.cs` |
-| `IsFault`, `IsEStopReleased`, `IsBusy`, `Mode` | `fault()`, `estop_released()`, `busy()`, `mode()` | |
+| `IsFault`, `IsEStopReleased`, `IsBusy`, `Mode` | `fault()`, `estop_released()`, `busy()`, `mode()` | Secondo `robot.hpp`, `busy()` serve a capire se il plan è terminato: è il segnale usato per la fine ciclo |
 | `ReadStates()` | `states()` | Copiare gli array in `ImmutableArray`; unità invariate (rad, Nm, m + quaternione) |
 | `GetPlanList()`, `GetPlanInfo()` | `plan_list()`, `plan_info()` | Campi di `PlanInfo` da verificare |
 | `Enable()`, `ClearFault()` | `Enable()`, `ClearFault()` | Asincroni lato robot: lo stato arriva dal polling |
@@ -259,14 +261,18 @@ I nomi a destra seguono l'API RDK (C++/Python). I nomi esatti nel wrapper C# **s
 | `SetVelocityScale(p)` | `SetVelocityScale(p)` | |
 | `ExecutePlan(name, false)` | `ExecutePlan(name, continue_exec)` | |
 | `PausePlan(bool)` | `PausePlan(bool)` | Verificare se `busy()` resta vero in pausa |
-| `StopPlan()` | **nessuna corrispondenza certa** | Probabilmente `Stop()`; da verificare |
+| `StopPlan()` | `StopPlan()` | Corrisponde a `Robot::StopPlan()` in C++; valido in NRT_PLAN_EXECUTION |
 | `Stop()` | `Stop()` | Ferma e porta in IDLE |
-| `DrainEventLog()` | **nessuna corrispondenza certa** | Restituire lista vuota finché non si trova l'API dei log robot |
+| `DrainEventLog()` | `event_log()` | Restituisce `List<RobotEvent>`, ottenuta dal JSON di `GetEventLog` nativo. Convertire nel `RobotEvent` di Core e restituire solo le voci nuove |
+
+Stranezza nota: `enabling_button_pressed()` chiama la funzione nativa `EnablingButtonReleased`, quindi il valore potrebbe essere invertito. Oggi non lo usiamo; se servirà, va verificato sul robot.
 
 ### 9.3 Eccezioni
 
+Il wrapper segnala gli errori come semplici `System.Exception`, con `[Flexiv RDK Error <codice>]` nel messaggio. `FlexivBackend` li converte:
 - Errori di comunicazione (link perso, timeout, robot non raggiungibile) → `RobotBackendException`. Il worker la interpreta come perdita di connessione e riconnette.
 - Comando rifiutato dal robot (modo errato, robot non operativo) → `InvalidOperationException` con il messaggio RDK. Il worker lo riporta come comando fallito, senza disconnettere.
+- La distinzione si fa sul codice di errore estratto dal messaggio. La tabella dei codici va presa dai sorgenti RDK della versione usata.
 - Nessuna eccezione deve uscire da `IsConnected`.
 
 ### 9.4 Cosa non deve cambiare altrove
