@@ -1,0 +1,77 @@
+﻿@using RobotGateway.Core
+@implements IAsyncDisposable
+@inject SnapshotStore Store
+@inject TimeProvider Time
+
+@* Robot state always visible in the top bar. Read-only: it only reads the snapshot. *@
+<div class="status-bar">
+    <span class="badge fs-6 @RobotStateStyle.BadgeClass(_snapshot.State)">@RobotStateStyle.Label(_snapshot.State)</span>
+    <span class="plan">
+        <i class="bi bi-diagram-3" aria-hidden="true"></i>
+        @(_snapshot.CurrentPlan ?? "no plan")
+    </span>
+    @if (_stale)
+    {
+        <span class="badge text-bg-warning">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> stale data
+        </span>
+    }
+</div>
+
+@* Software STOP, always visible on the operator host. StopButton renders nothing on the monitoring host. *@
+<div class="stop-slot">
+    <StopButton Source="status-bar" />
+</div>
+
+@code {
+    private static readonly TimeSpan RefreshPeriod = TimeSpan.FromMilliseconds(250);
+
+    // No new snapshot for this long means the worker loop is stuck or the service is in trouble.
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(2);
+
+    private RobotSnapshot _snapshot = RobotSnapshot.Initial;
+    private bool _stale;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _refreshLoop;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _refreshLoop = RefreshLoopAsync();
+    }
+
+    private async Task RefreshLoopAsync()
+    {
+        using var timer = new PeriodicTimer(RefreshPeriod);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                if (Refresh())
+                    await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <returns>True when something visible changed since the last render.</returns>
+    private bool Refresh()
+    {
+        var current = Store.Current;
+        var stale = current.Sequence > 0 && Time.GetUtcNow() - current.Timestamp > StaleAfter;
+        var changed = current.State != _snapshot.State
+            || current.CurrentPlan != _snapshot.CurrentPlan
+            || stale != _stale;
+        _snapshot = current;
+        _stale = stale;
+        return changed;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        if (_refreshLoop is not null)
+            await _refreshLoop;
+        _cts.Dispose();
+    }
+}

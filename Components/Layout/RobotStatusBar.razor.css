@@ -1,0 +1,18 @@
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 1;          /* take all the free space on the left of the top bar */
+    min-width: 0;
+}
+
+.plan {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stop-slot {
+    display: flex;
+    align-items: center;
+}

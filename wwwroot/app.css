@@ -1,19 +1,66 @@
-html, body {
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+/* =====================================================================
+   FlexivManager palette: change the colors here, every page uses them.
+   ===================================================================== */
+:root {
+    --fm-brand: #cb1417;        /* company logo red: brand only, never for robot status */
+    --fm-gray-900: #15171a;     /* sidebar */
+    --fm-gray-800: #1d2024;     /* page background */
+    --fm-gray-700: #272b30;     /* cards and top bar */
+    --fm-gray-600: #3a3f46;     /* borders */
+    --fm-text: #e4e6e9;
+    --fm-text-muted: #9aa1aa;
+    --fm-accent: #4a6d94;       /* primary buttons, RUNNING badge (white text on it) */
+    --fm-accent-rgb: 74, 109, 148;
+    --fm-link: #8fb0d6;         /* links: lighter, readable on dark gray */
+    --fm-link-rgb: 143, 176, 214;
 }
 
-a, .btn-link {
-    color: #006bb7;
+/* Bootstrap dark theme, recolored with the palette above.
+   Status colors (success, warning, danger, info) stay Bootstrap's own on purpose. */
+[data-bs-theme="dark"] {
+    --bs-body-bg: var(--fm-gray-800);
+    --bs-body-color: var(--fm-text);
+    --bs-secondary-color: var(--fm-text-muted);
+    --bs-tertiary-bg: var(--fm-gray-700);
+    --bs-border-color: var(--fm-gray-600);
+    --bs-primary: var(--fm-accent);
+    --bs-primary-rgb: var(--fm-accent-rgb);
+    --bs-link-color: var(--fm-link);
+    --bs-link-color-rgb: var(--fm-link-rgb);
+    --bs-link-hover-color: #b5cbe5;
+    --bs-link-hover-color-rgb: 181, 203, 229;
+}
+
+.card {
+    --bs-card-bg: var(--fm-gray-700);
+}
+
+    .card .table {
+        --bs-table-bg: transparent;
+    }
+
+html, body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
 .btn-primary {
-    color: #fff;
-    background-color: #1b6ec2;
-    border-color: #1861ac;
+    --bs-btn-color: #fff;
+    --bs-btn-bg: var(--fm-accent);
+    --bs-btn-border-color: var(--fm-accent);
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #5a80aa;
+    --bs-btn-hover-border-color: #5a80aa;
+    --bs-btn-active-bg: #5a80aa;
+}
+
+.btn:disabled, .btn.disabled {
+    /* In the dark theme Bootstrap's default (65% opacity) still looks clickable: fade and gray it out */
+    --bs-btn-disabled-opacity: 0.4;
+    filter: grayscale(1);
 }
 
 .btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+  box-shadow: 0 0 0 0.1rem var(--fm-gray-800), 0 0 0 0.25rem var(--fm-link);
 }
 
 .content {

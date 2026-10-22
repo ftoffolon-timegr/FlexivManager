@@ -1,6 +1,11 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
+﻿@inject FlexivManager.Hosting.HostRole Role
+
+<div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
-        <a class="navbar-brand" href="">FlexivManager</a>
+        <a class="navbar-brand" href="">
+            <img src="img/logo-time.png" alt="TIME" class="brand-logo" />
+            FlexivManager
+        </a>
     </div>
 </div>
 
@@ -10,27 +15,47 @@
     <nav class="nav flex-column">
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
+                <i class="bi bi-speedometer2" aria-hidden="true"></i> Home
             </NavLink>
         </div>
 
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="robot">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Robot status
+                <i class="bi bi-robot" aria-hidden="true"></i> Robot status
             </NavLink>
         </div>
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
+        @* The operator panel exists only on the operator host (localhost). *@
+        @if (Role.CanCommand)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="operator">
+                    <i class="bi bi-joystick" aria-hidden="true"></i> Operator
+                </NavLink>
+            </div>
+        }
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="weather">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Weather
-            </NavLink>
-        </div>
+        @* Planning pages live on the monitoring host (remote). Reading is open;
+           the pages themselves ask for login before editing. *@
+        @if (Role.CanEdit)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="plans">
+                    <i class="bi bi-diagram-3" aria-hidden="true"></i> Robot plans
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="jobs">
+                    <i class="bi bi-card-checklist" aria-hidden="true"></i> Jobs
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="orders">
+                    <i class="bi bi-list-ol" aria-hidden="true"></i> Work list
+                </NavLink>
+            </div>
+        }
     </nav>
 </div>
-
