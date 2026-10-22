@@ -180,6 +180,11 @@ public sealed class RobotCommandService : IDisposable
         if (!await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2), ct))
             return (null, "Cycle history is still being saved: retry.");
 
+        // One order in progress at a time: while an order is Active nothing else may run
+        // (neither another order nor a one-off job).
+        if (await FindOtherActiveOrderAsync(orderId, ct) is { } active)
+            return (null, OrderInProgressMessage(active));
+
         ProductionOrder? order = null;
         if (orderId is { } id)
         {
@@ -206,6 +211,12 @@ public sealed class RobotCommandService : IDisposable
             return (null, rejection);
         return (request, null);
     }
+
+    private async Task<ProductionOrder?> FindOtherActiveOrderAsync(int? orderId, CancellationToken ct) =>
+        (await _planning.ListOpenOrdersAsync(ct)).FirstOrDefault(o => o.Status == OrderStatus.Active && o.Id != orderId);
+
+    internal static string OrderInProgressMessage(ProductionOrder active) =>
+        $"Order {active.OrderNumber} is in progress ({active.CompletedCount}/{active.Quantity}): complete or cancel it before starting another order.";
 
     private void Disarm()
     {

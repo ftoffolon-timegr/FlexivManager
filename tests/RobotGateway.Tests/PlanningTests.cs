@@ -175,6 +175,41 @@ public class ScanServiceTests
     }
 
     [Fact]
+    public async Task Scan_OfAnotherOrder_IsRefused_WhileAnOrderIsInProgress()
+    {
+        _planning.Orders[0] = _planning.Orders[0] with { Status = OrderStatus.Active }; // OP-1, B200
+
+        var other = await _scanner.ResolveAsync("A100", "test");
+        Assert.False(other.IsValid);
+        Assert.Contains("OP-1 is in progress", other.Error);
+
+        var same = await _scanner.ResolveAsync("B200", "test");
+        Assert.Equal("OP-1", same.Order?.OrderNumber);
+    }
+
+    [Fact]
+    public async Task Scan_OfBareJob_IsRefused_WhileAnOrderIsInProgress()
+    {
+        _planning.AddJob("C300", "PLAN-C");                                             // no order for it
+        _planning.Orders[0] = _planning.Orders[0] with { Status = OrderStatus.Active };
+
+        var result = await _scanner.ResolveAsync("C300", "test");
+
+        Assert.False(result.IsValid);
+        Assert.Contains("OP-1 is in progress", result.Error);
+    }
+
+    [Fact]
+    public async Task Scan_IsFreeAgain_AfterActiveOrderCompletes()
+    {
+        _planning.Orders[0] = _planning.Orders[0] with { Status = OrderStatus.Completed, CompletedCount = 2 };
+
+        var result = await _scanner.ResolveAsync("A100", "test");
+
+        Assert.Equal("OP-2", result.Order?.OrderNumber);
+    }
+
+    [Fact]
     public async Task Scan_WithoutOpenOrder_LoadsOneOffJob()
     {
         _planning.Orders.Clear();

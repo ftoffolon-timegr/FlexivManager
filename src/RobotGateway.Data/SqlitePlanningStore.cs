@@ -219,6 +219,10 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
         var row = await db.Orders.FirstOrDefaultAsync(o => o.Id == id, ct);
         if (row is { Status: OrderStatus.Pending })
         {
+            // Backstop for the one-order-in-progress rule (also checked before every start).
+            var other = await db.Orders.FirstOrDefaultAsync(o => o.Status == OrderStatus.Active && o.Id != id, ct);
+            if (other is not null)
+                throw new PlanningConflictException($"Order {other.OrderNumber} is already in progress: {row.OrderNumber} cannot become active.");
             row.Status = OrderStatus.Active;
             Touch(row, user);
             await SaveConcurrent(db, ct);

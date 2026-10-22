@@ -24,7 +24,16 @@ public sealed class ScanService(IPlanningReader reader, EventLog events, TimePro
         if (!job.Enabled)
             return Done(new ScanResult(code, null, null, $"Job for '{code}' is disabled."), source);
 
-        var order = (await reader.ListOpenOrdersAsync(ct)).FirstOrDefault(o => o.ProductCode == code);
+        var open = await reader.ListOpenOrdersAsync(ct);
+        // One order in progress at a time: while it is Active, only its own code is accepted
+        // (no other order, no one-off job). Rescanning its code keeps it selected.
+        if (open.FirstOrDefault(o => o.Status == OrderStatus.Active) is { } active)
+        {
+            return active.ProductCode == code
+                ? Done(new ScanResult(code, job, active, null), source)
+                : Done(new ScanResult(code, null, null, RobotCommandService.OrderInProgressMessage(active)), source);
+        }
+        var order = open.FirstOrDefault(o => o.ProductCode == code);
         return Done(new ScanResult(code, job, order, null), source);
     }
 

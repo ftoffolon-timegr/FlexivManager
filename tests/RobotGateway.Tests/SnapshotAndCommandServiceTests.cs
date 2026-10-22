@@ -239,6 +239,24 @@ public class RobotCommandServiceTests
     }
 
     [Fact]
+    public async Task OnlyOneOrderInProgress()
+    {
+        _planning.Orders[0] = _planning.Orders[0] with { Status = OrderStatus.Active, CompletedCount = 1 };
+        var other = _planning.AddOrder("OP-2", "A100", 1);
+
+        var refused = await _service.RequestStartAsync("", other.Id, Source);
+        Assert.False(refused.IsAccepted);
+        Assert.Contains("OP-1 is in progress", refused.Rejection);
+
+        Assert.True((await _service.RequestStartAsync("", 1, Source)).IsAccepted);       // the active order itself
+        Assert.False((await _service.RequestStartAsync("A100", null, Source)).IsAccepted); // no one-off job meanwhile
+
+        // Block lifts when the active order is cancelled (e.g. from the remote station).
+        _planning.Orders[0] = _planning.Orders[0] with { Status = OrderStatus.Cancelled };
+        Assert.True((await _service.RequestStartAsync("", other.Id, Source)).IsAccepted);
+    }
+
+    [Fact]
     public void Resume_RequiresPaused()
     {
         Assert.False(_service.RequestResume(Source).IsAccepted);

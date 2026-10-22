@@ -21,6 +21,8 @@
     var s = _snapshot;
     var running = s.ActiveCycle is not null;
     var canCommand = _commands is not null && !_busy;
+    // One order in progress at a time: it must be completed or cancelled before another one starts.
+    var activeOrder = _orders.FirstOrDefault(o => o.Status == OrderStatus.Active);
 }
 
 <div class="operator-grid">
@@ -53,7 +55,7 @@
                             <option value="@job.ProductCode">@job.ProductCode → @job.PlanName</option>
                         }
                     </select>
-                    <button class="btn btn-outline-secondary" disabled="@(running || string.IsNullOrEmpty(_manualCode))" @onclick="SelectManualAsync">Load</button>
+                    <button class="btn btn-outline-secondary" disabled="@(running || activeOrder is not null || string.IsNullOrEmpty(_manualCode))" @onclick="SelectManualAsync">Load</button>
                 </div>
             }
         </div>
@@ -213,7 +215,10 @@
                             <td class="text-end">
                                 @if (_commands is not null && !selected)
                                 {
-                                    <button class="btn btn-sm btn-outline-primary" disabled="@running" @onclick="() => SelectOrderAsync(o)">Select</button>
+                                    var blocked = activeOrder is not null && activeOrder.Id != o.Id;
+                                    <button class="btn btn-sm btn-outline-primary" disabled="@(running || blocked)"
+                                            title="@(blocked ? $"Order {activeOrder!.OrderNumber} is in progress" : null)"
+                                            @onclick="() => SelectOrderAsync(o)">Select</button>
                                 }
                             </td>
                         </tr>
@@ -224,6 +229,10 @@
         @if (_orders.Count == 0)
         {
             <p class="text-muted small m-2">No open orders. Scan a code to run a one-off job.</p>
+        }
+        else if (activeOrder is not null)
+        {
+            <p class="text-muted small m-2">Order @activeOrder.OrderNumber is in progress: other orders and one-off jobs can start once it is completed or cancelled.</p>
         }
     </section>
 </div>
@@ -351,6 +360,9 @@
     private async Task ResolveSelectionAsync()
     {
         _selectionError = null;
+        // One order in progress at a time: while it is Active it is always the selection.
+        if (_orders.FirstOrDefault(o => o.Status == OrderStatus.Active) is { } active)
+            (_explicitOrderId, _oneOffCode) = (active.Id, null);
         if (_oneOffCode is { } code)
         {
             _selectedOrder = null;

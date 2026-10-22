@@ -98,6 +98,21 @@ public sealed class PlanningStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Store_NeverHasTwoActiveOrders()
+    {
+        var first = await Add("OP-1");
+        var second = await Add("OP-2");
+        await _db.Store.MarkOrderActiveAsync(first.Id, User);
+
+        await Assert.ThrowsAsync<PlanningConflictException>(() => _db.Store.MarkOrderActiveAsync(second.Id, User));
+        Assert.Equal(OrderStatus.Pending, (await _db.Store.GetOrderAsync(second.Id))!.Status);
+
+        await _db.Store.CancelOrderAsync(first.Id, User);
+        await _db.Store.MarkOrderActiveAsync(second.Id, User);
+        Assert.Equal(OrderStatus.Active, (await _db.Store.GetOrderAsync(second.Id))!.Status);
+    }
+
+    [Fact]
     public async Task OneOffCycle_IsRecordedWithoutOrder()
     {
         var cycle = new CycleRecord("B2", "PLAN-B", 50, null, null, "test", DateTimeOffset.UtcNow, TimeSpan.FromSeconds(1), CycleOutcome.Completed, null);
