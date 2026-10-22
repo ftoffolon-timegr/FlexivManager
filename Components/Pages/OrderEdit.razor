@@ -1,0 +1,115 @@
+@page "/orders/new"
+@page "/orders/{Id:int}"
+@attribute [Authorize(Policy = Policies.Planner)]
+@inject IServiceProvider Services
+@inject NavigationManager Navigation
+
+<PageTitle>@(Id is null ? "New order" : "Edit order")</PageTitle>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <h1 class="mb-0">@(Id is null ? "New order" : $"Order {_order?.OrderNumber}")</h1>
+    <PlannerAccount />
+</div>
+
+@if (_planning is null)
+{
+    <div class="alert alert-info">Editing is available on the remote planning station only.</div>
+    return;
+}
+@if (Id is not null && _loaded && _order is not { Status: OrderStatus.Pending })
+{
+    <div class="alert alert-warning">
+        @(_order is null ? "Order not found." : $"Order {_order.OrderNumber} is {_order.Status}: only pending orders can be edited.")
+        <a href="orders">Back to the work list</a>
+    </div>
+    return;
+}
+
+@if (_errors.Count > 0)
+{
+    <div class="alert alert-danger">
+        @foreach (var error in _errors)
+        {
+            <div>@error</div>
+        }
+    </div>
+}
+
+<div class="card" style="max-width: 40rem">
+    <div class="card-body">
+        <div class="mb-3">
+            <label class="form-label" for="number">Order number</label>
+            <input id="number" class="form-control" maxlength="@PlanningValidator.MaxOrderNumberLength" @bind="_number" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="code">Product / job code</label>
+            <select id="code" class="form-select" @bind="_code">
+                <option value="">-- choose --</option>
+                @foreach (var job in _jobs)
+                {
+                    <option value="@job.ProductCode">@job.ProductCode → @job.PlanName @(job.Enabled ? "" : "(disabled)")</option>
+                }
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="quantity">Quantity (cycles)</label>
+            <input id="quantity" type="number" min="1" max="@PlanningValidator.MaxQuantity" class="form-control" style="max-width: 10rem" @bind="_quantity" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="notes">Notes</label>
+            <textarea id="notes" class="form-control" rows="2" maxlength="@PlanningValidator.MaxNotesLength" @bind="_notes"></textarea>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-primary" disabled="@_busy" @onclick="SaveAsync"><i class="bi bi-save" aria-hidden="true"></i> Save</button>
+            <a class="btn btn-secondary" href="orders">Cancel</a>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private PlanningService? _planning;
+    private ProductionOrder? _order;
+    private IReadOnlyList<Job> _jobs = [];
+    private bool _loaded;
+    private string _number = "";
+    private string _code = "";
+    private int _quantity = 1;
+    private string? _notes;
+    private IReadOnlyList<string> _errors = [];
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _planning = Services.GetService<PlanningService>();
+        if (_planning is null) return;
+        _jobs = await _planning.Reader.ListJobsAsync();
+        if (Id is { } id)
+        {
+            _order = await _planning.Reader.GetOrderAsync(id);
+            if (_order is not null)
+                (_number, _code, _quantity, _notes) = (_order.OrderNumber, _order.ProductCode, _order.Quantity, _order.Notes);
+        }
+        _loaded = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        try
+        {
+            var user = (await AuthState).User;
+            var draft = new OrderDraft(_number, _code, _quantity, _notes);
+            var result = _order is null
+                ? await _planning!.CreateOrderAsync(draft, user)
+                : await _planning!.UpdateOrderAsync(_order.Id, _order.Version, draft, user);
+            if (result.Success)
+                Navigation.NavigateTo("orders");
+            else
+                _errors = result.Errors;
+        }
+        finally { _busy = false; }
+    }
+}

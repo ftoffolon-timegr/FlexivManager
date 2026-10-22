@@ -30,12 +30,14 @@ public sealed record SwitchModeCommand(RobotMode Mode) : RobotCommand;
 
 public sealed record SetVelocityScaleCommand(int Percent) : RobotCommand;
 
-/// <summary>Runs a plan stored on the robot (Flexiv Elements) at the given velocity scale.</summary>
-public sealed record RunPlanCommand(string PlanName, int VelocityScale) : RobotCommand
+/// <summary>Runs one cycle: the job's robot plan once, counted for the order if any.</summary>
+public sealed record StartCycleCommand(CycleRequest Request) : RobotCommand
 {
     public override bool IsMotion => true;
 
-    public override string Describe() => $"Run plan '{PlanName}' at {VelocityScale} % velocity";
+    public override string Describe() =>
+        $"Run plan '{Request.Job.PlanName}' at {Request.Job.VelocityScale} % for code '{Request.Job.ProductCode}'"
+        + (Request.OrderNumber is null ? " (one-off)" : $", order {Request.OrderNumber}");
 }
 
 public sealed record PausePlanCommand : RobotCommand;
@@ -47,6 +49,7 @@ public sealed record ResumePlanCommand : RobotCommand
     public override string Describe() => "Resume the paused plan";
 }
 
+/// <summary>Stops the running plan; the cycle ends as Stopped and is not counted.</summary>
 public sealed record StopPlanCommand : RobotCommand;
 
 public enum CommandOutcome

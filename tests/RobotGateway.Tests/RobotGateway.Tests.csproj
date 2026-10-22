@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\RobotGateway.Core\RobotGateway.Core.csproj" />
     <ProjectReference Include="..\..\src\RobotGateway.Mock\RobotGateway.Mock.csproj" />
+    <ProjectReference Include="..\..\src\RobotGateway.Data\RobotGateway.Data.csproj" />
     <ProjectReference Include="..\..\FlexivManager.csproj" />
   </ItemGroup>
 

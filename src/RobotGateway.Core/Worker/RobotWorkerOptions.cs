@@ -21,6 +21,13 @@ public sealed class RobotWorkerOptions
     /// <summary>Validity of a motion confirmation token (request -> confirm).</summary>
     public TimeSpan ConfirmationTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
-    /// <summary>Program catalog file, relative to the content root.</summary>
-    public string CatalogPath { get; set; } = "programs.json";
+    /// <summary>Global velocity limit [%] for every job.</summary>
+    [Range(1, 100)]
+    public int MaxVelocityScale { get; set; } = 100;
+
+    /// <summary>A started plan must be seen running within this time, otherwise the cycle fails.</summary>
+    public TimeSpan PlanStartTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How often the worker re-reads the robot plan list while idle.</summary>
+    public TimeSpan PlanListRefreshInterval { get; set; } = TimeSpan.FromSeconds(10);
 }

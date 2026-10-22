@@ -16,6 +16,12 @@ public sealed record RobotSnapshot
     public PlanInfo? Plan { get; init; }
     public string? CurrentPlan { get; init; }
     public DateTimeOffset? CurrentPlanStartedAt { get; init; }
+
+    /// <summary>The work cycle being executed, null when idle.</summary>
+    public ActiveCycle? ActiveCycle { get; init; }
+
+    /// <summary>The last finished cycle (any outcome) since the service started.</summary>
+    public CycleRecord? LastCycle { get; init; }
     public ImmutableArray<string> AvailablePlans { get; init; } = [];
     public long CompletedCycles { get; init; }
     public TimeSpan? LastCycleTime { get; init; }

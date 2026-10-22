@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="src\RobotGateway.Core\RobotGateway.Core.csproj" />
     <ProjectReference Include="src\RobotGateway.Mock\RobotGateway.Mock.csproj" />
+    <ProjectReference Include="src\RobotGateway.Data\RobotGateway.Data.csproj" />
   </ItemGroup>
 
 </Project>

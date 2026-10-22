@@ -33,7 +33,7 @@ public class SnapshotStoreTests
     }
 }
 
-/// <summary>Command service without a worker: queue behaviour and the two-step confirmation.</summary>
+/// <summary>Command service without a worker: queue behaviour, confirmation and order rules.</summary>
 public class RobotCommandServiceTests
 {
     private const string Source = "test";
@@ -41,26 +41,51 @@ public class RobotCommandServiceTests
     private readonly ManualTimeProvider _time = new();
     private readonly SnapshotStore _store = new();
     private readonly EventLog _events = new();
+    private readonly FakePlanning _planning = new();
     private readonly RobotCommandService _service;
 
     public RobotCommandServiceTests()
     {
-        var catalog = new ProgramCatalog(
-        [
-            new WorkProgram { Id = "pick", Name = "Pick", PlanName = "PLAN-Pick", VelocityScale = 50, MaxVelocityScale = 80 },
-        ]);
-        var options = Options.Create(new RobotWorkerOptions { ConfirmationTimeout = TimeSpan.FromSeconds(15) });
-        _service = new RobotCommandService(options, _store, catalog, _events, _time);
-        SetState(RobotServiceState.Operational);
+        _planning.AddJob("A100", "PLAN-Pick", 50);
+        _planning.AddJob("OFF", "PLAN-Pick", 50, enabled: false);
+        _planning.AddJob("FAST", "PLAN-Pick", 90);
+        _planning.AddJob("GHOST", "PLAN-NotOnRobot", 50);
+        _planning.AddOrder("OP-1", "A100", 2);
+
+        var options = Options.Create(new RobotWorkerOptions { ConfirmationTimeout = TimeSpan.FromSeconds(15), MaxVelocityScale = 80 });
+        _service = new RobotCommandService(options, _store, _planning, new CycleEvents(), _events, _time);
+        Publish(RobotServiceState.Operational);
     }
 
-    private void SetState(RobotServiceState state) =>
-        _store.Publish(_store.Current with { Sequence = _store.Current.Sequence + 1, State = state });
+    private void Publish(RobotServiceState state, CycleRecord? lastCycle = null) =>
+        _store.Publish(_store.Current with
+        {
+            Sequence = _store.Current.Sequence + 1,
+            State = state,
+            AvailablePlans = ["PLAN-Pick"],
+            LastCycle = lastCycle ?? _store.Current.LastCycle,
+        });
 
     private PendingCommand Dequeued()
     {
         Assert.True(_service.TryDequeueNormal(out var pending));
         return pending;
+    }
+
+    private static CycleRecord Cycle(int? orderId, CycleOutcome outcome) =>
+        new("A100", "PLAN-Pick", 50, orderId, "OP-1", Source, DateTimeOffset.UnixEpoch, TimeSpan.FromSeconds(1), outcome, null);
+
+    /// <summary>Confirms a start and plays the worker: completes the queued command successfully.</summary>
+    private async Task<StartCycleCommand> ConfirmStartAsync(string code, int? orderId)
+    {
+        var request = await _service.RequestStartAsync(code, orderId, Source);
+        Assert.True(request.IsAccepted, request.Rejection);
+        var confirm = _service.ConfirmAsync(request.Token!, Source);
+        var pending = Dequeued();
+        Assert.True(pending.TryStart());
+        pending.Complete(CommandResult.Ok());
+        Assert.True((await confirm).IsSuccess);
+        return Assert.IsType<StartCycleCommand>(pending.Command);
     }
 
     // ---- Queue -------------------------------------------------------------------------------
@@ -114,43 +139,47 @@ public class RobotCommandServiceTests
     [Fact]
     public async Task MotionCommand_WithoutConfirmation_IsRejected_AndNotQueued()
     {
-        var result = await _service.SendAsync(new RunPlanCommand("PLAN-Pick", 50), Source);
+        var command = new StartCycleCommand(new CycleRequest(_planning.Jobs[0], null, null));
+
+        var result = await _service.SendAsync(command, Source);
 
         Assert.Equal(CommandOutcome.Rejected, result.Outcome);
         Assert.False(_service.TryDequeueNormal(out _));
     }
 
     [Fact]
-    public void Request_DoesNotQueueAnything()
+    public async Task Request_DoesNotQueueAnything()
     {
-        var request = _service.RequestRunProgram("pick", 50, Source);
+        var request = await _service.RequestStartAsync("a100", null, Source);
 
         Assert.True(request.IsAccepted);
-        Assert.Contains("Pick", request.Summary);
+        Assert.Contains("PLAN-Pick", request.Summary);
         Assert.False(_service.TryDequeueNormal(out _));
     }
 
     [Fact]
-    public async Task Confirm_QueuesTheCommand_Once()
+    public async Task Confirm_QueuesTheJobSnapshot_Once()
     {
-        var request = _service.RequestRunProgram("pick", 60, Source);
+        var request = await _service.RequestStartAsync("A100", 1, Source);
+        // A remote edit after the request does not change what was confirmed.
+        _planning.Jobs[0] = _planning.Jobs[0] with { PlanName = "PLAN-Other", Version = 2 };
 
         var confirmed = _service.ConfirmAsync(request.Token!, Source);
         var pending = Dequeued();
-        Assert.Equal(new RunPlanCommand("PLAN-Pick", 60), pending.Command);
-        Assert.True(pending.TryStart());
+        var command = Assert.IsType<StartCycleCommand>(pending.Command);
+        Assert.Equal("PLAN-Pick", command.Request.Job.PlanName);
+        Assert.Equal("OP-1", command.Request.OrderNumber);
+        pending.TryStart();
         pending.Complete(CommandResult.Ok());
         Assert.True((await confirmed).IsSuccess);
 
-        var second = await _service.ConfirmAsync(request.Token!, Source);
-        Assert.Equal(CommandOutcome.Rejected, second.Outcome);
-        Assert.False(_service.TryDequeueNormal(out _));
+        Assert.Equal(CommandOutcome.Rejected, (await _service.ConfirmAsync(request.Token!, Source)).Outcome);
     }
 
     [Fact]
     public async Task ExpiredConfirmation_IsRejected()
     {
-        var request = _service.RequestRunProgram("pick", 50, Source);
+        var request = await _service.RequestStartAsync("A100", null, Source);
         _time.Advance(16);
 
         var result = await _service.ConfirmAsync(request.Token!, Source);
@@ -160,44 +189,35 @@ public class RobotCommandServiceTests
     }
 
     [Fact]
-    public async Task UnknownToken_IsRejected()
+    public async Task CancelledOrUnknownConfirmation_IsRejected()
     {
-        var result = await _service.ConfirmAsync("not-a-token", Source);
-        Assert.Equal(CommandOutcome.Rejected, result.Outcome);
-    }
-
-    [Fact]
-    public async Task CancelledConfirmation_CannotBeConfirmed()
-    {
-        var request = _service.RequestRunProgram("pick", 50, Source);
+        var request = await _service.RequestStartAsync("A100", null, Source);
         Assert.True(_service.CancelConfirmation(request.Token!, Source));
 
         Assert.Equal(CommandOutcome.Rejected, (await _service.ConfirmAsync(request.Token!, Source)).Outcome);
+        Assert.Equal(CommandOutcome.Rejected, (await _service.ConfirmAsync("not-a-token", Source)).Outcome);
     }
 
     [Fact]
     public async Task Stop_VoidsPendingConfirmations()
     {
-        var request = _service.RequestRunProgram("pick", 50, Source);
+        var request = await _service.RequestStartAsync("A100", null, Source);
         _ = _service.StopAsync(Source);
 
         Assert.Equal(CommandOutcome.Rejected, (await _service.ConfirmAsync(request.Token!, Source)).Outcome);
     }
 
-    [Fact]
-    public void ProgramNotInCatalog_IsRejected()
+    [Theory]
+    [InlineData("UNKNOWN", "No job")]
+    [InlineData("OFF", "disabled")]
+    [InlineData("FAST", "exceeds")]
+    [InlineData("GHOST", "not stored on the robot")]
+    public async Task InvalidJob_IsRejected(string code, string reason)
     {
-        Assert.False(_service.RequestRunProgram("unknown", 50, Source).IsAccepted);
-        Assert.False(_service.RequestConfirmation(new RunPlanCommand("PLAN-NotInCatalog", 50), Source).IsAccepted);
-    }
-
-    [Fact]
-    public void VelocityAboveProgramLimit_IsRejected()
-    {
-        var request = _service.RequestRunProgram("pick", 81, Source);
+        var request = await _service.RequestStartAsync(code, null, Source);
 
         Assert.False(request.IsAccepted);
-        Assert.Contains("80", request.Rejection);
+        Assert.Contains(reason, request.Rejection);
     }
 
     [Theory]
@@ -205,29 +225,81 @@ public class RobotCommandServiceTests
     [InlineData(RobotServiceState.Running)]
     [InlineData(RobotServiceState.Fault)]
     [InlineData(RobotServiceState.EStop)]
-    public void Request_IsRejected_WhenStateDoesNotAllowIt(RobotServiceState state)
+    public async Task Request_IsRejected_WhenStateDoesNotAllowIt(RobotServiceState state)
     {
-        SetState(state);
-        Assert.False(_service.RequestRunProgram("pick", 50, Source).IsAccepted);
+        Publish(state);
+        Assert.False((await _service.RequestStartAsync("A100", null, Source)).IsAccepted);
+    }
+
+    [Fact]
+    public async Task ClosedOrder_IsRejected()
+    {
+        _planning.AddOrder("OP-DONE", "A100", 1, OrderStatus.Completed, done: 1);
+        Assert.False((await _service.RequestStartAsync("A100", 2, Source)).IsAccepted);
     }
 
     [Fact]
     public void Resume_RequiresPaused()
     {
         Assert.False(_service.RequestResume(Source).IsAccepted);
-        SetState(RobotServiceState.Paused);
+        Publish(RobotServiceState.Paused);
         Assert.True(_service.RequestResume(Source).IsAccepted);
     }
 
-    [Fact]
-    public void NonMotionCommand_CannotBeConfirmed() =>
-        Assert.False(_service.RequestConfirmation(new EnableCommand(), Source).IsAccepted);
+    // ---- Next cycle of an order --------------------------------------------------------------
 
     [Fact]
-    public void Requests_AreLogged()
+    public async Task NextCycle_OfConfirmedOrder_NeedsOnePress()
     {
-        _service.RequestRunProgram("pick", 50, Source);
-        _service.RequestRunProgram("pick", 99, Source);
+        Assert.False(_service.CanRepeatWithoutConfirmation(1));
+        await ConfirmStartAsync("A100", 1);
+        Publish(RobotServiceState.Operational, Cycle(1, CycleOutcome.Completed));
+
+        Assert.True(_service.CanRepeatWithoutConfirmation(1));
+        var next = _service.StartNextCycleAsync(1, Source);
+        var pending = Dequeued();
+        Assert.IsType<StartCycleCommand>(pending.Command);
+        pending.TryStart();
+        pending.Complete(CommandResult.Ok());
+        Assert.True((await next).IsSuccess);
+    }
+
+    [Theory]
+    [InlineData(CycleOutcome.Failed)]
+    [InlineData(CycleOutcome.Stopped)]
+    public async Task NextCycle_AfterFaultOrStop_NeedsConfirmationAgain(CycleOutcome outcome)
+    {
+        await ConfirmStartAsync("A100", 1);
+        Publish(RobotServiceState.Operational, Cycle(1, outcome));
+
+        Assert.False(_service.CanRepeatWithoutConfirmation(1));
+        Assert.Equal(CommandOutcome.Rejected, (await _service.StartNextCycleAsync(1, Source)).Outcome);
+    }
+
+    [Fact]
+    public async Task NextCycle_AfterStop_IsDisarmed()
+    {
+        await ConfirmStartAsync("A100", 1);
+        Publish(RobotServiceState.Operational, Cycle(1, CycleOutcome.Completed));
+        _ = _service.StopAsync(Source);
+
+        Assert.False(_service.CanRepeatWithoutConfirmation(1));
+    }
+
+    [Fact]
+    public async Task OneOffJob_IsNeverArmed()
+    {
+        await ConfirmStartAsync("A100", null);
+        Publish(RobotServiceState.Operational, Cycle(null, CycleOutcome.Completed));
+
+        Assert.False(_service.CanRepeatWithoutConfirmation(1));
+    }
+
+    [Fact]
+    public async Task Requests_AreLogged()
+    {
+        await _service.RequestStartAsync("A100", null, Source);
+        await _service.RequestStartAsync("UNKNOWN", null, Source);
 
         var log = _events.GetRecent();
         Assert.Contains(log, e => e.Source == "Commands" && e.Message.Contains("Confirmation requested"));

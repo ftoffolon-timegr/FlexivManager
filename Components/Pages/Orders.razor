@@ -1,0 +1,204 @@
+@page "/orders"
+@implements IAsyncDisposable
+@inject IPlanningReader Planning
+@inject IServiceProvider Services
+@inject HostRole Role
+
+<PageTitle>Work list</PageTitle>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <h1 class="mb-0">Work list</h1>
+    <PlannerAccount />
+</div>
+<p class="text-muted small">
+    Production orders, worked top to bottom at the local station. The order in progress stays on top and can only be cancelled.
+    Each cycle runs the job's plan once; the order completes when the quantity is reached.
+</p>
+
+@if (_message is not null)
+{
+    <div class="alert @(_messageOk ? "alert-success" : "alert-danger") py-2">@_message</div>
+}
+
+@if (Role.CanEdit)
+{
+    <AuthorizeView Policy="@Policies.Planner">
+        <a class="btn btn-primary mb-3" href="orders/new"><i class="bi bi-plus-lg" aria-hidden="true"></i> New order</a>
+    </AuthorizeView>
+}
+
+<section class="mb-4">
+    <h2 class="h5">Open orders</h2>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr><th>#</th><th>Order</th><th>Code</th><th>Done</th><th>Status</th><th>Notes</th><th>Updated</th><th></th></tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < _open.Count; i++)
+                {
+                    var o = _open[i];
+                    var first = i == 0;
+                    <tr class="@(first ? "table-active" : "")">
+                        <td>@(i + 1)</td>
+                        <td class="fw-semibold">@o.OrderNumber @if (first) {<span class="badge text-bg-info ms-1">current</span>}</td>
+                        <td>@o.ProductCode</td>
+                        <td>@o.CompletedCount / @o.Quantity</td>
+                        <td><span class="badge @StatusClass(o.Status)">@o.Status</span></td>
+                        <td class="small">@o.Notes</td>
+                        <td class="small text-muted">@o.UpdatedBy · @o.UpdatedAt.ToLocalTime().ToString("g")</td>
+                        <td class="text-end text-nowrap">
+                            @if (_planning is not null)
+                            {
+                                <AuthorizeView Policy="@Policies.Planner" Context="auth">
+                                    @if (o.Status == OrderStatus.Pending)
+                                    {
+                                        <button class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@_busy" @onclick="() => MoveAsync(o, -1)"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
+                                        <button class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@_busy" @onclick="() => MoveAsync(o, 1)"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
+                                        <a class="btn btn-sm btn-outline-primary" href="orders/@o.Id"><i class="bi bi-pencil" aria-hidden="true"></i></a>
+                                    }
+                                    @if (_confirmCancelId == o.Id)
+                                    {
+                                        <button class="btn btn-sm btn-danger" disabled="@_busy" @onclick="() => CancelAsync(o)">Confirm cancel</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmCancelId = null">Keep</button>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-sm btn-outline-danger" title="Cancel order" @onclick="() => _confirmCancelId = o.Id"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                                    }
+                                </AuthorizeView>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    @if (_open.Count == 0)
+    {
+        <p class="text-muted">No open orders.</p>
+    }
+</section>
+
+<section class="mb-4">
+    <h2 class="h5">Recent cycles</h2>
+    <div class="table-responsive">
+        <table class="table table-sm small">
+            <thead><tr><th>Start</th><th>Order</th><th>Code</th><th>Plan</th><th>Duration</th><th>Outcome</th><th>Note</th></tr></thead>
+            <tbody>
+                @foreach (var c in _cycles)
+                {
+                    <tr>
+                        <td>@c.StartedAt.ToLocalTime().ToString("g")</td>
+                        <td>@(c.OrderNumber ?? "one-off")</td>
+                        <td>@c.ProductCode</td>
+                        <td><code>@c.PlanName</code></td>
+                        <td>@c.Duration.TotalSeconds.ToString("0.0") s</td>
+                        <td><span class="badge @OutcomeClass(c.Outcome)">@c.Outcome</span></td>
+                        <td>@c.Message</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section>
+    <h2 class="h5">Closed orders</h2>
+    <table class="table table-sm small">
+        <thead><tr><th>Order</th><th>Code</th><th>Done</th><th>Status</th><th>Closed by</th><th>When</th></tr></thead>
+        <tbody>
+            @foreach (var o in _closed)
+            {
+                <tr><td>@o.OrderNumber</td><td>@o.ProductCode</td><td>@o.CompletedCount / @o.Quantity</td><td><span class="badge @StatusClass(o.Status)">@o.Status</span></td><td>@o.UpdatedBy</td><td>@o.UpdatedAt.ToLocalTime().ToString("g")</td></tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private PlanningService? _planning;
+    private IReadOnlyList<ProductionOrder> _open = [];
+    private IReadOnlyList<ProductionOrder> _closed = [];
+    private IReadOnlyList<CycleRecord> _cycles = [];
+    private int? _confirmCancelId;
+    private bool _busy;
+    private string? _message;
+    private bool _messageOk;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _loop;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _planning = Services.GetService<PlanningService>();
+        await LoadAsync();
+        _loop = LoopAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _open = await Planning.ListOpenOrdersAsync(_cts.Token);
+        _closed = await Planning.ListClosedOrdersAsync(50, _cts.Token);
+        _cycles = await Planning.ListCyclesAsync(20, _cts.Token);
+    }
+
+    // Progress comes from the local station: refresh periodically.
+    private async Task LoopAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                await LoadAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task MoveAsync(ProductionOrder order, int direction) =>
+        await Run(user => _planning!.MoveOrderAsync(order.Id, direction, user), null);
+
+    private async Task CancelAsync(ProductionOrder order)
+    {
+        _confirmCancelId = null;
+        await Run(user => _planning!.CancelOrderAsync(order.Id, user), $"Order {order.OrderNumber} cancelled.");
+    }
+
+    private async Task Run(Func<System.Security.Claims.ClaimsPrincipal, Task<EditResult>> action, string? okMessage)
+    {
+        _busy = true;
+        try
+        {
+            var result = await action((await AuthState).User);
+            (_messageOk, _message) = result.Success ? (true, okMessage) : (false, string.Join(" ", result.Errors));
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private static string StatusClass(OrderStatus status) => status switch
+    {
+        OrderStatus.Active => "text-bg-primary",
+        OrderStatus.Pending => "text-bg-secondary",
+        OrderStatus.Completed => "text-bg-success",
+        _ => "text-bg-dark",
+    };
+
+    private static string OutcomeClass(CycleOutcome outcome) => outcome switch
+    {
+        CycleOutcome.Completed => "text-bg-success",
+        CycleOutcome.Stopped => "text-bg-warning",
+        _ => "text-bg-danger",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        if (_loop is not null) await _loop;
+        _cts.Dispose();
+    }
+}

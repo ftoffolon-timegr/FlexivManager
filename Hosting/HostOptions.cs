@@ -13,15 +13,41 @@ public sealed class HostEndpointOptions
     /// <summary>Only meaningful for the monitoring host.</summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>Monitoring host: planning pages (jobs, work list) require the editor login.</summary>
+    public bool RequireLoginForEdit { get; set; } = true;
+
+    /// <summary>Monitoring host: the single planner account.</summary>
+    public EditorAccountOptions Editor { get; set; } = new();
+
     public IPAddress ParseAddress(string hostName) =>
         IPAddress.TryParse(Address, out var ip)
             ? ip
             : throw new InvalidOperationException($"Hosts:{hostName}:Address '{Address}' is not a valid IP address.");
 }
 
-/// <summary>Which host a component is rendered on. Lets the UI hide command features on the monitoring host.</summary>
-public sealed record HostRole(string Name, bool CanCommand)
+public sealed class EditorAccountOptions
 {
-    public static HostRole Operator { get; } = new("Operator", CanCommand: true);
-    public static HostRole Monitoring { get; } = new("Monitoring", CanCommand: false);
+    public string UserName { get; set; } = "planner";
+
+    /// <summary>
+    /// PBKDF2 hash produced by <c>FlexivManager hash-password &lt;password&gt;</c>.
+    /// Empty: nobody can log in (planning is read-only).
+    /// </summary>
+    public string PasswordHash { get; set; } = "";
+}
+
+/// <summary>
+/// Which host a component is rendered on. Operator (local): executes, never edits.
+/// Monitoring (remote): configures jobs and the work list, never moves the robot.
+/// </summary>
+public sealed record HostRole(string Name, bool CanCommand, bool CanEdit)
+{
+    public static HostRole Operator { get; } = new("Operator", CanCommand: true, CanEdit: false);
+    public static HostRole Monitoring { get; } = new("Monitoring", CanCommand: false, CanEdit: true);
+}
+
+public static class Policies
+{
+    /// <summary>Planning edits (jobs, work list). Login required unless disabled in configuration.</summary>
+    public const string Planner = "Planner";
 }

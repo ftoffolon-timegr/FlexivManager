@@ -1,0 +1,65 @@
+@page "/jobs"
+@inject SnapshotStore Store
+@inject IPlanningReader Planning
+@inject HostRole Role
+
+<PageTitle>Jobs</PageTitle>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <h1 class="mb-0">Jobs</h1>
+    <PlannerAccount />
+</div>
+<p class="text-muted small">Product / job code → robot plan. Several codes may use the same plan. Changes apply from the next cycle.</p>
+
+@if (Role.CanEdit)
+{
+    <a class="btn btn-primary mb-3" href="jobs/new"><i class="bi bi-plus-lg" aria-hidden="true"></i> New job</a>
+}
+
+<div class="table-responsive">
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr><th>Code</th><th>Plan</th><th>On robot</th><th>Velocity</th><th>Description</th><th>Enabled</th><th>Updated</th><th></th></tr>
+        </thead>
+        <tbody>
+            @foreach (var job in _jobs)
+            {
+                var onRobot = Store.Current.AvailablePlans.Contains(job.PlanName);
+                <tr class="@(job.Enabled ? "" : "text-muted")">
+                    <td class="fw-semibold">@job.ProductCode</td>
+                    <td><code>@job.PlanName</code></td>
+                    <td>
+                        @if (onRobot)
+                        {
+                            <i class="bi bi-check-circle-fill text-success" aria-label="yes"></i>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-warning">missing</span>
+                        }
+                    </td>
+                    <td>@job.VelocityScale %</td>
+                    <td class="small">@job.Description</td>
+                    <td>@(job.Enabled ? "yes" : "no")</td>
+                    <td class="small text-muted">v@(job.Version) · @job.UpdatedBy · @job.UpdatedAt.ToLocalTime().ToString("g")</td>
+                    <td class="text-end">
+                        @if (Role.CanEdit)
+                        {
+                            <a class="btn btn-sm btn-outline-primary" href="jobs/@job.Id"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</a>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+@if (_jobs.Count == 0)
+{
+    <p class="text-muted">No jobs yet.</p>
+}
+
+@code {
+    private IReadOnlyList<Job> _jobs = [];
+
+    protected override async Task OnInitializedAsync() => _jobs = await Planning.ListJobsAsync();
+}

@@ -4,10 +4,6 @@
     gap: 1rem;
 }
 
-.programs {
+.worklist {
     grid-column: 1 / -1;
-}
-
-.velocity {
-    width: 7rem;
 }

@@ -1,0 +1,37 @@
+@using FlexivManager.Hosting
+@inject HostRole Role
+@inject NavigationManager Navigation
+
+@* Login state for the planning pages (monitoring host only). *@
+@if (Role.CanEdit)
+{
+    <AuthorizeView Policy="@Policies.Planner">
+        <Authorized>
+            @if (context.User.Identity?.IsAuthenticated == true)
+            {
+                <form method="post" action="account/logout" class="d-inline-flex align-items-center gap-2 small">
+                    <AntiforgeryToken />
+                    <span class="text-muted"><i class="bi bi-person-check" aria-hidden="true"></i> @context.User.Identity?.Name</span>
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">Logout</button>
+                </form>
+            }
+            else
+            {
+                <span class="small text-warning"><i class="bi bi-unlock" aria-hidden="true"></i> Editing open (login disabled in configuration)</span>
+            }
+        </Authorized>
+        <NotAuthorized>
+            <a class="btn btn-sm btn-outline-primary" href="@LoginUrl">
+                <i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Login to edit
+            </a>
+        </NotAuthorized>
+    </AuthorizeView>
+}
+else
+{
+    <span class="small text-muted"><i class="bi bi-info-circle" aria-hidden="true"></i> Editing is available on the remote planning station.</span>
+}
+
+@code {
+    private string LoginUrl => $"account/login?returnUrl={Uri.EscapeDataString("/" + Navigation.ToBaseRelativePath(Navigation.Uri))}";
+}

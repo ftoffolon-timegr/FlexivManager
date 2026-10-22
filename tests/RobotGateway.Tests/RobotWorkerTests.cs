@@ -5,16 +5,23 @@ using RobotGateway.Mock;
 
 namespace RobotGateway.Tests;
 
-/// <summary>Integration tests: real worker thread + mock backend, real time with short durations.</summary>
+/// <summary>
+/// Integration tests: real worker thread + mock backend + cycle recorder + SQLite store,
+/// real time with short plan durations.
+/// </summary>
 public sealed class RobotWorkerTests : IAsyncLifetime
 {
+    private const string Source = "test";
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(5);
 
+    private readonly TempPlanningDb _db = new();
     private readonly MockBackend _robot;
     private readonly SnapshotStore _store = new();
     private readonly EventLog _events = new();
+    private readonly CycleEvents _cycleEvents = new();
     private readonly RobotCommandService _commands;
     private readonly RobotWorker _worker;
+    private readonly CycleRecorder _recorder;
 
     public RobotWorkerTests()
     {
@@ -35,61 +42,49 @@ public sealed class RobotWorkerTests : IAsyncLifetime
             DefaultCommandTimeout = TimeSpan.FromSeconds(2),
         });
 
-        var catalog = new ProgramCatalog(
-        [
-            new WorkProgram { Id = "short", Name = "Short", PlanName = "Short" },
-            new WorkProgram { Id = "long", Name = "Long", PlanName = "Long" },
-            new WorkProgram { Id = "faulty", Name = "Faulty", PlanName = "Faulty" },
-            new WorkProgram { Id = "ghost", Name = "Not on robot", PlanName = "DoesNotExist" },
-        ]);
-
         _robot = new MockBackend(mockOptions, TimeProvider.System);
-        _commands = new RobotCommandService(workerOptions, _store, catalog, _events, TimeProvider.System);
-        _worker = new RobotWorker(_robot, _commands, _store, _events, workerOptions, TimeProvider.System, NullLogger<RobotWorker>.Instance);
+        _commands = new RobotCommandService(workerOptions, _store, _db.Store, _cycleEvents, _events, TimeProvider.System);
+        _worker = new RobotWorker(_robot, _commands, _store, _events, _cycleEvents, workerOptions, TimeProvider.System, NullLogger<RobotWorker>.Instance);
+        _recorder = new CycleRecorder(_cycleEvents, _db.Store, _events, TimeProvider.System, NullLogger<CycleRecorder>.Instance);
     }
 
-    public Task InitializeAsync() => _worker.StartAsync(CancellationToken.None);
+    public async Task InitializeAsync()
+    {
+        await _db.Store.CreateJobAsync(new JobDraft("SHORT", "Short", 40, null, true), "test");
+        await _db.Store.CreateJobAsync(new JobDraft("LONG", "Long", 100, null, true), "test");
+        await _db.Store.CreateJobAsync(new JobDraft("FAULTY", "Faulty", 100, null, true), "test");
+        await _recorder.StartAsync(CancellationToken.None);
+        await _worker.StartAsync(CancellationToken.None);
+    }
 
     public async Task DisposeAsync()
     {
         await _worker.StopAsync(CancellationToken.None);
+        await _recorder.StopAsync(CancellationToken.None);
         _worker.Dispose();
+        _recorder.Dispose();
         _commands.Dispose();
+        _db.Dispose();
     }
 
-    private async Task<RobotSnapshot> WaitForStateAsync(RobotServiceState state)
+    private async Task<RobotSnapshot> WaitFor(Func<RobotSnapshot, bool> condition, string what)
     {
         var deadline = DateTime.UtcNow + WaitTimeout;
         while (DateTime.UtcNow < deadline)
         {
             var snapshot = _store.Current;
-            if (snapshot.State == state) return snapshot;
+            if (condition(snapshot)) return snapshot;
             await Task.Delay(5);
         }
-        throw new TimeoutException($"State {state} not reached; current {_store.Current.State}.");
+        throw new TimeoutException($"{what} not reached; state {_store.Current.State}.");
     }
 
-    private const string Source = "test";
+    private Task<RobotSnapshot> WaitForStateAsync(RobotServiceState state) => WaitFor(s => s.State == state, $"State {state}");
 
-    private async Task<CommandResult> Send(RobotCommand command)
+    private async Task Send(RobotCommand command)
     {
         var result = await _commands.SendAsync(command, Source);
         Assert.True(result.IsSuccess, $"{command.Name}: {result.Outcome} {result.Message}");
-        return result;
-    }
-
-    /// <summary>Two-step motion: request + confirm.</summary>
-    private async Task<CommandResult> Confirmed(RobotCommand command)
-    {
-        var request = _commands.RequestConfirmation(command, Source);
-        Assert.True(request.IsAccepted, request.Rejection);
-        return await _commands.ConfirmAsync(request.Token!, Source);
-    }
-
-    private async Task RunPlan(string plan, int velocity = 100)
-    {
-        var result = await Confirmed(new RunPlanCommand(plan, velocity));
-        Assert.True(result.IsSuccess, $"RunPlan {plan}: {result.Outcome} {result.Message}");
     }
 
     private async Task EnableAsync()
@@ -98,6 +93,25 @@ public sealed class RobotWorkerTests : IAsyncLifetime
         await Send(new EnableCommand());
         await WaitForStateAsync(RobotServiceState.Operational);
     }
+
+    /// <summary>Two-step start: request + confirm.</summary>
+    private async Task<CommandResult> StartAsync(string code, int? orderId = null)
+    {
+        var request = await _commands.RequestStartAsync(code, orderId, Source);
+        Assert.True(request.IsAccepted, request.Rejection);
+        return await _commands.ConfirmAsync(request.Token!, Source);
+    }
+
+    private async Task Started(string code, int? orderId = null)
+    {
+        var result = await StartAsync(code, orderId);
+        Assert.True(result.IsSuccess, $"Start {code}: {result.Outcome} {result.Message}");
+        await WaitFor(s => s.ActiveCycle is not null && s.State == RobotServiceState.Running, "cycle running");
+    }
+
+    private Task<RobotSnapshot> CycleEnded() => WaitFor(s => s.ActiveCycle is null && s.LastCycle is not null, "cycle end");
+
+    // ---- Lifecycle ---------------------------------------------------------------------------
 
     [Fact]
     public async Task Startup_ConnectsButNeverEnablesOrMoves()
@@ -123,50 +137,84 @@ public sealed class RobotWorkerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RunPlan_IsRejected_WhenNotOperational()
+    public async Task Start_IsRejected_WhenNotOperational()
     {
         await WaitForStateAsync(RobotServiceState.Connected);
 
-        var request = _commands.RequestConfirmation(new RunPlanCommand("Short", 100), Source);
-
-        Assert.False(request.IsAccepted);
+        Assert.False((await _commands.RequestStartAsync("SHORT", null, Source)).IsAccepted);
         Assert.False(_robot.IsBusy);
     }
 
-    [Fact]
-    public async Task PlanMissingOnRobot_IsRejected()
-    {
-        await EnableAsync();
-
-        var result = await Confirmed(new RunPlanCommand("DoesNotExist", 100));
-
-        Assert.Equal(CommandOutcome.Rejected, result.Outcome);
-    }
+    // ---- Cycles ------------------------------------------------------------------------------
 
     [Fact]
-    public async Task PlanCycle_RunsToCompletion_AndIsCounted()
+    public async Task OneOffCycle_RunsToCompletion_WithJobVelocity()
     {
         await EnableAsync();
+        await Started("SHORT");
+        Assert.Equal(40, _store.Current.ActiveCycle!.VelocityScale);
 
-        await RunPlan("Short");
-        var running = await WaitForStateAsync(RobotServiceState.Running);
-        Assert.Equal("Short", running.CurrentPlan);
-
-        var done = await WaitForStateAsync(RobotServiceState.Operational);
+        var done = await CycleEnded();
+        Assert.Equal(CycleOutcome.Completed, done.LastCycle!.Outcome);
+        Assert.Null(done.LastCycle.OrderId);
         Assert.Equal(1, done.CompletedCycles);
-        Assert.NotNull(done.LastCycleTime);
+        Assert.True(await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2)));
+        Assert.Single(await _db.Store.ListCyclesAsync(10));
     }
 
     [Fact]
-    public async Task Stop_StopsRunningPlan()
+    public async Task Order_FirstCycleConfirmed_NextOnePress_CompletesAtQuantity()
+    {
+        var order = await _db.Store.CreateOrderAsync(new OrderDraft("OP-1", "SHORT", 2, null), "test");
+        await EnableAsync();
+
+        await Started("", order.Id);
+        await CycleEnded();
+        await WaitForStateAsync(RobotServiceState.Operational);
+        Assert.True(await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal((1, OrderStatus.Active), await OrderProgress(order.Id));
+
+        Assert.True(_commands.CanRepeatWithoutConfirmation(order.Id));
+        var next = await _commands.StartNextCycleAsync(order.Id, Source);
+        Assert.True(next.IsSuccess, next.Message);
+        await WaitFor(s => s.ActiveCycle is null && s.CompletedCycles == 2, "second cycle end");
+        Assert.True(await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.Equal((2, OrderStatus.Completed), await OrderProgress(order.Id));
+        // Completed: the next start of this order is refused.
+        Assert.False((await _commands.RequestStartAsync("", order.Id, Source)).IsAccepted);
+    }
+
+    [Fact]
+    public async Task Fault_StopsTheCycle_NotCounted_RestartNeedsConfirmation()
+    {
+        var order = await _db.Store.CreateOrderAsync(new OrderDraft("OP-F", "FAULTY", 3, null), "test");
+        await EnableAsync();
+
+        await Started("", order.Id);
+        var fault = await WaitForStateAsync(RobotServiceState.Fault);
+        Assert.Null(fault.ActiveCycle);
+        Assert.Equal(CycleOutcome.Failed, fault.LastCycle!.Outcome);
+        Assert.True(await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal((0, OrderStatus.Active), await OrderProgress(order.Id));
+        Assert.False(_commands.CanRepeatWithoutConfirmation(order.Id));
+
+        await Send(new ClearFaultCommand());
+        await WaitForStateAsync(RobotServiceState.Connected);
+        await Send(new EnableCommand());
+        await WaitForStateAsync(RobotServiceState.Operational);
+    }
+
+    [Fact]
+    public async Task Stop_EndsTheCycleAsStopped()
     {
         await EnableAsync();
-        await RunPlan("Long");
-        await WaitForStateAsync(RobotServiceState.Running);
+        await Started("LONG");
 
         await Send(new StopCommand());
 
         var snapshot = await WaitForStateAsync(RobotServiceState.Operational);
+        Assert.Equal(CycleOutcome.Stopped, snapshot.LastCycle!.Outcome);
         Assert.Equal(RobotMode.Idle, snapshot.Status.Mode);
         Assert.Equal(0, snapshot.CompletedCycles);
         Assert.False(_robot.IsBusy);
@@ -176,43 +224,64 @@ public sealed class RobotWorkerTests : IAsyncLifetime
     public async Task PauseResumeStopPlan()
     {
         await EnableAsync();
-        await RunPlan("Long");
-        await WaitForStateAsync(RobotServiceState.Running);
+        await Started("LONG");
 
         await Send(new PausePlanCommand());
         await WaitForStateAsync(RobotServiceState.Paused);
 
-        Assert.True((await Confirmed(new ResumePlanCommand())).IsSuccess);
+        var resume = _commands.RequestResume(Source);
+        Assert.True((await _commands.ConfirmAsync(resume.Token!, Source)).IsSuccess);
         await WaitForStateAsync(RobotServiceState.Running);
 
         await Send(new StopPlanCommand());
-        await WaitForStateAsync(RobotServiceState.Operational);
+        var snapshot = await WaitForStateAsync(RobotServiceState.Operational);
+        Assert.Equal(CycleOutcome.Stopped, snapshot.LastCycle!.Outcome);
     }
 
     [Fact]
-    public async Task Fault_ThenClearFault_ThenEnable()
+    public async Task EditDuringCycle_AppliesToNextCycle()
     {
         await EnableAsync();
-        await RunPlan("Faulty");
+        await Started("SHORT");
+        var job = (await _db.Store.FindJobByCodeAsync("SHORT"))!;
+        await _db.Store.UpdateJobAsync(job.Id, job.Version, new JobDraft("SHORT", "Short", 70, null, true), "planner");
 
-        var fault = await WaitForStateAsync(RobotServiceState.Fault);
-        Assert.Null(fault.CurrentPlan);
-
-        await Send(new ClearFaultCommand());
-        await WaitForStateAsync(RobotServiceState.Connected);
-        await Send(new EnableCommand());
+        Assert.Equal(40, _store.Current.ActiveCycle?.VelocityScale);
+        await CycleEnded();
         await WaitForStateAsync(RobotServiceState.Operational);
+
+        await Started("SHORT");
+        Assert.Equal(70, _store.Current.ActiveCycle!.VelocityScale);
     }
 
     [Fact]
-    public async Task EStop_IsReported_AndReleaseRequiresEnable()
+    public async Task Stop_JumpsTheQueue_AndCancelsQueuedCommands()
     {
         await EnableAsync();
-        await RunPlan("Long");
-        await WaitForStateAsync(RobotServiceState.Running);
+        await Started("LONG");
+
+        var queued = Enumerable.Range(0, 10)
+            .Select(_ => _commands.SendAsync(new SetVelocityScaleCommand(50), Source))
+            .ToArray();
+        var stop = await _commands.StopAsync(Source);
+
+        Assert.True(stop.IsSuccess);
+        await WaitForStateAsync(RobotServiceState.Operational);
+        var results = await Task.WhenAll(queued);
+        Assert.Contains(results, r => r.Outcome == CommandOutcome.Cancelled);
+    }
+
+    // ---- Robot conditions --------------------------------------------------------------------
+
+    [Fact]
+    public async Task EStop_FailsTheCycle_AndReleaseRequiresEnable()
+    {
+        await EnableAsync();
+        await Started("LONG");
 
         _robot.SetEStop(true);
         await WaitForStateAsync(RobotServiceState.EStop);
+        await WaitFor(s => s.LastCycle?.Outcome == CycleOutcome.Failed, "cycle failed");
         Assert.Equal(CommandOutcome.Rejected, (await _commands.EnableAsync(Source)).Outcome);
 
         _robot.SetEStop(false);
@@ -250,46 +319,21 @@ public sealed class RobotWorkerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Shutdown_StopsRunningPlan()
+    public async Task Shutdown_StopsRunningCycle()
     {
         await EnableAsync();
-        await RunPlan("Long");
-        await WaitForStateAsync(RobotServiceState.Running);
+        await Started("LONG");
 
         await _worker.StopAsync(CancellationToken.None);
 
         Assert.False(_robot.IsConnected);
         Assert.Equal(RobotServiceState.Disconnected, _store.Current.State);
+        Assert.Equal(CycleOutcome.Stopped, _store.Current.LastCycle?.Outcome);
     }
 
-    [Fact]
-    public async Task RunPlan_AppliesVelocityScale()
+    private async Task<(int, OrderStatus)> OrderProgress(int id)
     {
-        await EnableAsync();
-        await RunPlan("Long", 40);
-
-        var running = await WaitForStateAsync(RobotServiceState.Running);
-        await Task.Delay(50);
-        Assert.Equal(40, _store.Current.Plan?.VelocityScale);
-        Assert.NotNull(running.CurrentPlanStartedAt);
-    }
-
-    [Fact]
-    public async Task Stop_JumpsTheQueue_AndCancelsQueuedCommands()
-    {
-        await EnableAsync();
-        await RunPlan("Long");
-        await WaitForStateAsync(RobotServiceState.Running);
-
-        // Normal commands queued behind each other; STOP must not wait for them.
-        var queued = Enumerable.Range(0, 10)
-            .Select(_ => _commands.SendAsync(new SetVelocityScaleCommand(50), Source))
-            .ToArray();
-        var stop = await _commands.StopAsync(Source);
-
-        Assert.True(stop.IsSuccess);
-        await WaitForStateAsync(RobotServiceState.Operational);
-        var results = await Task.WhenAll(queued);
-        Assert.Contains(results, r => r.Outcome == CommandOutcome.Cancelled);
+        var order = (await _db.Store.GetOrderAsync(id))!;
+        return (order.CompletedCount, order.Status);
     }
 }

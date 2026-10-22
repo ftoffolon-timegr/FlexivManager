@@ -2,7 +2,7 @@ using RobotGateway.Core;
 
 namespace FlexivManager.Api;
 
-/// <summary>Read-only JSON API, mapped on both hosts. GET only: nothing here can command the robot.</summary>
+/// <summary>Read-only JSON API, mapped on both hosts. GET only: nothing here can command the robot or edit data.</summary>
 public static class ReadOnlyApi
 {
     /// <summary>A snapshot older than this means the worker loop is stuck.</summary>
@@ -23,13 +23,24 @@ public static class ReadOnlyApi
         api.MapGet("/events", (EventLog events, int? max) =>
             events.GetRecent(Math.Clamp(max ?? 50, 1, 500)));
 
-        api.MapGet("/programs", (IProgramCatalog catalog, SnapshotStore store) =>
+        api.MapGet("/plans", (SnapshotStore store) => store.Current.AvailablePlans);
+
+        api.MapGet("/jobs", async (IPlanningReader planning, SnapshotStore store, CancellationToken ct) =>
         {
             var onRobot = store.Current.AvailablePlans;
-            return catalog.Programs.Select(p => new ProgramDto(
-                p.Id, p.Name, p.Description, p.PlanName, p.VelocityScale, p.MaxVelocityScale,
-                p.PlanName is not null && onRobot.Contains(p.PlanName)));
+            return (await planning.ListJobsAsync(ct)).Select(j => new JobDto(
+                j.Id, j.ProductCode, j.PlanName, j.VelocityScale, j.Description, j.Enabled,
+                onRobot.Contains(j.PlanName), j.Version, j.UpdatedAt, j.UpdatedBy));
         });
+
+        api.MapGet("/orders", async (IPlanningReader planning, CancellationToken ct) => new
+        {
+            Open = await planning.ListOpenOrdersAsync(ct),
+            Closed = await planning.ListClosedOrdersAsync(50, ct),
+        });
+
+        api.MapGet("/cycles", async (IPlanningReader planning, int? max, CancellationToken ct) =>
+            await planning.ListCyclesAsync(Math.Clamp(max ?? 50, 1, 500), ct));
 
         return endpoints;
     }
@@ -48,11 +59,10 @@ public sealed record StatusDto(
     bool EStopReleased,
     bool Busy,
     RobotMode Mode,
-    string? CurrentPlan,
+    ActiveCycle? ActiveCycle,
     string? PlanNode,
-    DateTimeOffset? PlanStartedAt,
+    CycleRecord? LastCycle,
     long CompletedCycles,
-    double? LastCycleSeconds,
     string? LastError,
     double LoopRateHz)
 {
@@ -69,11 +79,10 @@ public sealed record StatusDto(
         s.Status.EStopReleased,
         s.Status.Busy,
         s.Status.Mode,
-        s.CurrentPlan,
+        s.ActiveCycle,
         string.IsNullOrEmpty(s.Plan?.NodeName) ? null : s.Plan.NodeName,
-        s.CurrentPlanStartedAt,
+        s.LastCycle,
         s.CompletedCycles,
-        s.LastCycleTime?.TotalSeconds,
         s.LastError,
         Math.Round(s.LoopRateHz, 1));
 }
@@ -96,11 +105,14 @@ public sealed record TelemetryDto(
             [.. st.Q], [.. st.Dq], [.. st.Tau], [.. st.TauExt], [.. st.Temperature], [.. st.TcpPose], [.. st.ExtWrenchInTcp]);
 }
 
-public sealed record ProgramDto(
-    string Id,
-    string Name,
-    string? Description,
-    string? PlanName,
+public sealed record JobDto(
+    int Id,
+    string ProductCode,
+    string PlanName,
     int VelocityScale,
-    int MaxVelocityScale,
-    bool AvailableOnRobot);
+    string? Description,
+    bool Enabled,
+    bool PlanOnRobot,
+    int Version,
+    DateTimeOffset UpdatedAt,
+    string UpdatedBy);

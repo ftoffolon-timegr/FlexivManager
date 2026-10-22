@@ -1,6 +1,7 @@
-<Solution>
+﻿<Solution>
   <Folder Name="/src/">
     <Project Path="src/RobotGateway.Core/RobotGateway.Core.csproj" />
+    <Project Path="src/RobotGateway.Data/RobotGateway.Data.csproj" />
     <Project Path="src/RobotGateway.Mock/RobotGateway.Mock.csproj" />
   </Folder>
   <Folder Name="/tests/">

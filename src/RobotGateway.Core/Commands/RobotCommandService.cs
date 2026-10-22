@@ -39,20 +39,28 @@ public sealed class RobotCommandService : IDisposable
     private readonly AutoResetEvent _wake = new(false);
     private readonly RobotWorkerOptions _options;
     private readonly SnapshotStore _snapshots;
-    private readonly IProgramCatalog _catalog;
+    private readonly IPlanningReader _planning;
+    private readonly CycleEvents _cycleEvents;
     private readonly EventLog _events;
     private readonly TimeProvider _time;
+
+    // Order whose first cycle was confirmed: its next cycles start with one press while the previous
+    // cycle of the same order completed normally. Cleared by STOP / stop plan.
+    private int? _armedOrderId;
+    private readonly Lock _armSync = new();
 
     public RobotCommandService(
         IOptions<RobotWorkerOptions> options,
         SnapshotStore snapshots,
-        IProgramCatalog catalog,
+        IPlanningReader planning,
+        CycleEvents cycleEvents,
         EventLog events,
         TimeProvider time)
     {
         _options = options.Value;
         _snapshots = snapshots;
-        _catalog = catalog;
+        _planning = planning;
+        _cycleEvents = cycleEvents;
         _events = events;
         _time = time;
     }
@@ -85,27 +93,65 @@ public sealed class RobotCommandService : IDisposable
             Log(EventLevel.Warning, $"{command.Name} refused from {source}: motion commands require confirmation.");
             return Task.FromResult(CommandResult.Rejected("Motion commands require confirmation."));
         }
-        if (command is StopCommand)
-            VoidConfirmations("STOP");
+        if (command is StopCommand or StopPlanCommand)
+        {
+            Disarm();
+            VoidConfirmations(command.Name);
+        }
         return EnqueueAsync(command, source, timeout, cancellationToken);
     }
 
     // ---- Motion commands: two-step confirmation ----------------------------------------------
 
-    /// <summary>Step 1 for running a catalog program.</summary>
-    public ConfirmationRequest RequestRunProgram(string programId, int velocityScale, string source)
+    /// <summary>
+    /// Step 1 for a cycle: the job of <paramref name="productCode"/>, counted for <paramref name="orderId"/>
+    /// when given (the order code wins). Reads the current job version: edits apply from the next cycle.
+    /// </summary>
+    public async Task<ConfirmationRequest> RequestStartAsync(string productCode, int? orderId, string source, CancellationToken ct = default)
     {
-        var program = _catalog.FindById(programId);
-        if (program is null)
-            return Reject($"Run program '{programId}'", $"Program '{programId}' is not in the catalog.", source);
-        return RequestConfirmation(new RunPlanCommand(program.PlanName!, velocityScale), source);
+        var (request, error) = await BuildCycleRequestAsync(productCode, orderId, ct);
+        if (request is null)
+            return Reject($"Start '{ProductCode.Normalize(productCode)}'", error!, source);
+        return RequestConfirmation(new StartCycleCommand(request), source);
     }
 
     /// <summary>Step 1 for resuming a paused plan.</summary>
     public ConfirmationRequest RequestResume(string source) => RequestConfirmation(new ResumePlanCommand(), source);
 
     /// <summary>
-    /// Step 1: validates a motion command (catalog, limits, current state) and returns a single-use token.
+    /// True when the next cycle of <paramref name="orderId"/> can start with a single press: its first
+    /// cycle was confirmed and the last cycle (of this order) completed normally.
+    /// </summary>
+    public bool CanRepeatWithoutConfirmation(int orderId)
+    {
+        lock (_armSync)
+        {
+            var snapshot = _snapshots.Current;
+            return _armedOrderId == orderId
+                && snapshot.ActiveCycle is null
+                && snapshot.LastCycle is { Outcome: CycleOutcome.Completed } last
+                && last.OrderId == orderId;
+        }
+    }
+
+    /// <summary>Next cycle of an armed order, without a second confirmation. Same checks as a first start.</summary>
+    public async Task<CommandResult> StartNextCycleAsync(int orderId, string source, CancellationToken ct = default)
+    {
+        if (!CanRepeatWithoutConfirmation(orderId))
+            return CommandResult.Rejected("Confirmation required for this start.");
+        var (request, error) = await BuildCycleRequestAsync("", orderId, ct);
+        if (request is null)
+        {
+            Log(EventLevel.Warning, $"Next cycle refused from {source}: {error}");
+            return CommandResult.Rejected(error!);
+        }
+        var command = new StartCycleCommand(request);
+        Log(EventLevel.Info, $"Next cycle requested by {source}: {command.Describe()}.");
+        return await EnqueueAsync(command, source, null, ct);
+    }
+
+    /// <summary>
+    /// Step 1: validates a motion command against the current state and returns a single-use token.
     /// Nothing is sent to the robot until <see cref="ConfirmAsync"/>.
     /// </summary>
     public ConfirmationRequest RequestConfirmation(RobotCommand command, string source)
@@ -113,16 +159,6 @@ public sealed class RobotCommandService : IDisposable
         var summary = command.Describe();
         if (!command.IsMotion)
             return Reject(summary, $"{command.Name} does not need confirmation.", source);
-
-        if (command is RunPlanCommand run)
-        {
-            var program = _catalog.FindByPlanName(run.PlanName);
-            if (program is null)
-                return Reject(summary, $"Plan '{run.PlanName}' is not in the program catalog.", source);
-            if (run.VelocityScale > program.MaxVelocityScale)
-                return Reject(summary, $"Velocity {run.VelocityScale} % exceeds the limit of {program.MaxVelocityScale} % for '{program.Name}'.", source);
-            summary = $"Run '{program.Name}' (plan {run.PlanName}) at {run.VelocityScale} % velocity";
-        }
 
         var rejection = CommandPolicy.Check(_snapshots.Current.State, command);
         if (rejection is not null)
@@ -136,6 +172,44 @@ public sealed class RobotCommandService : IDisposable
 
         Log(EventLevel.Info, $"Confirmation requested by {source}: {summary} (expires in {_options.ConfirmationTimeout.TotalSeconds:0} s).");
         return new ConfirmationRequest(token, null, summary, expiresAt);
+    }
+
+    private async Task<(CycleRequest? Request, string? Error)> BuildCycleRequestAsync(string productCode, int? orderId, CancellationToken ct)
+    {
+        // Let the recorder store the previous cycle first, so order counts are up to date.
+        if (!await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2), ct))
+            return (null, "Cycle history is still being saved: retry.");
+
+        ProductionOrder? order = null;
+        if (orderId is { } id)
+        {
+            order = await _planning.GetOrderAsync(id, ct);
+            if (order is null || !order.IsOpen)
+                return (null, "The order is no longer open.");
+            if (order.Remaining == 0)
+                return (null, $"Order {order.OrderNumber} is already complete.");
+            productCode = order.ProductCode;
+        }
+
+        var job = await _planning.FindJobByCodeAsync(productCode, ct);
+        if (job is null)
+            return (null, $"No job for product code '{ProductCode.Normalize(productCode)}'.");
+        if (!job.Enabled)
+            return (null, $"Job for '{job.ProductCode}' is disabled.");
+        if (job.VelocityScale > _options.MaxVelocityScale)
+            return (null, $"Velocity {job.VelocityScale} % exceeds the limit of {_options.MaxVelocityScale} %.");
+        if (!_snapshots.Current.AvailablePlans.Contains(job.PlanName))
+            return (null, $"Plan '{job.PlanName}' is not stored on the robot.");
+
+        var request = new CycleRequest(job, order?.Id, order?.OrderNumber);
+        if (CommandPolicy.Check(_snapshots.Current.State, new StartCycleCommand(request)) is { } rejection)
+            return (null, rejection);
+        return (request, null);
+    }
+
+    private void Disarm()
+    {
+        lock (_armSync) _armedOrderId = null;
     }
 
     /// <summary>Step 2: executes the confirmed command. The token is consumed even if the command fails.</summary>
@@ -153,7 +227,15 @@ public sealed class RobotCommandService : IDisposable
         }
 
         Log(EventLevel.Info, $"Confirmed by {source}: {pending.Summary}.");
-        return EnqueueAsync(pending.Command, source, null, cancellationToken);
+        return ConfirmedAsync(pending.Command, source, cancellationToken);
+    }
+
+    private async Task<CommandResult> ConfirmedAsync(RobotCommand command, string source, CancellationToken ct)
+    {
+        var result = await EnqueueAsync(command, source, null, ct);
+        if (result.IsSuccess && command is StartCycleCommand { Request.OrderId: { } orderId })
+            lock (_armSync) _armedOrderId = orderId;
+        return result;
     }
 
     /// <summary>Drops a pending confirmation (operator pressed Cancel).</summary>
