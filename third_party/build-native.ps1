@@ -17,7 +17,10 @@ param(
     [string]$RdkTag = "v1.8",
     # Kept short and outside the repo: Fast-DDS builds produce very long paths.
     [string]$WorkDir = (Join-Path $env:USERPROFILE "fxrdk"),
-    [int]$Jobs = 8
+    [int]$Jobs = 8,
+    # Network failures while cloning the dependencies are retried.
+    [int]$Retries = 3,
+    [int]$RetryDelaySeconds = 120
 )
 $ErrorActionPreference = "Stop"
 
@@ -53,9 +56,31 @@ if (-not (Test-Path $rdkSrc)) {
 
 if (-not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
     Step "Building RDK dependencies into $install (several minutes)"
-    Push-Location (Join-Path $rdkSrc "thirdparty")
-    try { Run $bash @("build_and_install_dependencies.sh", ($install -replace "\\", "/"), "$Jobs") }
-    finally { Pop-Location }
+    $cloned = Join-Path $rdkSrc "thirdparty\cloned"
+    for ($attempt = 1; ; $attempt++) {
+        # A clone interrupted by a network error leaves a repository without commits, which makes the
+        # dependency scripts fail on the next run: remove it so it is cloned again.
+        if (Test-Path $cloned) {
+            foreach ($dir in Get-ChildItem $cloned -Directory) {
+                git -C $dir.FullName rev-parse --verify --quiet HEAD *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "Removing incomplete clone $($dir.FullName)" -ForegroundColor Yellow
+                    Remove-Item $dir.FullName -Recurse -Force
+                }
+            }
+        }
+        Push-Location (Join-Path $rdkSrc "thirdparty")
+        try {
+            & $bash build_and_install_dependencies.sh ($install -replace "\\", "/") "$Jobs"
+            $exit = $LASTEXITCODE
+        }
+        finally { Pop-Location }
+        if ($exit -eq 0) { break }
+        # Dependencies are cloned from GitHub/GitLab, which sometimes refuse requests under load.
+        if ($attempt -ge $Retries) { throw "Dependency build failed $attempt times (exit code $exit). Retry later." }
+        Write-Host "Dependency build failed (exit code $exit), retrying in $RetryDelaySeconds s ($attempt/$Retries)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds $RetryDelaySeconds
+    }
 }
 
 Step "Installing flexiv_rdk $RdkTag"
