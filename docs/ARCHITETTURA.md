@@ -1,6 +1,6 @@
 # FlexivManager – Architettura e moduli
 
-Gateway per un cobot Flexiv Rizon. Stato attuale: **solo robot simulato** (`MockBackend`); nessun robot reale viene contattato.
+Gateway per un cobot Flexiv Rizon. Backend di default: robot simulato (`MockBackend`). Il backend reale (`FlexivBackend`) è pronto ma non ancora provato sul robot.
 
 > Lo STOP software non sostituisce mai l'arresto di emergenza hardware.
 
@@ -75,7 +75,7 @@ flowchart LR
 | `RobotGateway.Mock` | `src/RobotGateway.Mock` | Core | Robot simulato a 7 assi |
 | `RobotGateway.Data` | `src/RobotGateway.Data` | Core, EF Core SQLite 10.0.13 | Persistenza di codici, ordini e storico cicli |
 | `RobotGateway.Tests` | `tests/RobotGateway.Tests` | tutti | xUnit: unità + integrazione (worker reale + mock + SQLite + host reali) |
-| *(futuro)* `RobotGateway.Flexiv` | `src/RobotGateway.Flexiv` | Core, wrapper RDK | Backend reale, vedi §9 |
+| `RobotGateway.Flexiv` | `src/RobotGateway.Flexiv` | Core, wrapper RDK (`third_party/flexiv_rdk_csharp`) | Backend reale (`Robot:Backend = Flexiv`), vedi §9 |
 
 Impostazioni comuni in `Directory.Build.props` (x64, nullable, C# latest). Soluzione: `FlexivManager.slnx`.
 
@@ -203,6 +203,11 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 | `Robot:PlanStartTimeout` | 5 s | Il plan avviato deve risultare in esecuzione entro questo tempo |
 | `Robot:PlanListRefreshInterval` | 10 s | Rilettura della lista plan a robot fermo |
 | `Robot:Mock:EnableDelay` | 1.5 s | Solo simulatore |
+| `Robot:Backend` | `Mock` | `Mock` = simulatore, `Flexiv` = robot reale |
+| `Robot:Flexiv:SerialNumber` | `Rizon4-062609` | Numero di serie del robot |
+| `Robot:Flexiv:RdkVersion` | `1.8` | Versione della DLL nativa (deve corrispondere al software del robot) |
+| `Robot:Flexiv:NetworkInterfaces` | vuoto | IP locali da usare per cercare il robot (vuoto = tutte) |
+| `Robot:Flexiv:ClearFaultTimeoutSeconds` | 3 | Attesa massima di ClearFault |
 
 ---
 
@@ -221,63 +226,88 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 
 ---
 
-## 9. Dove si innesta il wrapper Flexiv
+## 9. Wrapper Flexiv e backend reale
 
-Il wrapper C# di Flexiv RDK va usato **in un solo punto**: un nuovo progetto che implementa `IRobotBackend`. Nient'altro nel codice deve conoscerlo.
+Il wrapper C# di Flexiv RDK è usato **in un solo punto**: il progetto `src/RobotGateway.Flexiv`, che implementa `IRobotBackend`. Il resto del codice non lo conosce. La scelta tra simulatore e robot si fa con `Robot:Backend` (`Mock` di default, oppure `Flexiv`).
 
-### 9.1 Struttura proposta
+### 9.1 Compatibilità robot ↔ RDK
 
+Fonte: tabella ufficiale Flexiv (robot_software_compatibility). Se le versioni non corrispondono, RDK rifiuta la connessione.
+
+| Software robot | flexiv_rdk | Cartella nativa | `Robot:Flexiv:RdkVersion` |
+|----------------|-----------|-----------------|---------------------------|
+| 3.10.x (primo robot di test: Rizon 4-062609, 3.10.3, control box Hesper-062978) | v1.8 | `native/rdk-1.8/` | `1.8` |
+| 3.11.x | v1.9 | `native/rdk-1.9/` | `1.9` |
+
+### 9.2 File
+
+| File | Contenuto |
+|------|-----------|
+| `third_party/flexiv_rdk_csharp/` | Wrapper ufficiale copiato nel repo, fissato al commit `37a09c2` (Apache 2.0). Origine e modifiche in `README.md` e `LOCAL_CHANGES.md` |
+| `third_party/flexiv_rdk_csharp/FlexivRdk.csproj` | Compila le classi C# del wrapper come libreria |
+| `third_party/build-native.ps1` | Compila la DLL nativa per una versione RDK (x64 Release) e la copia in `src/RobotGateway.Flexiv/native/rdk-x.y/` con `VERSION.txt` |
+| `src/RobotGateway.Flexiv/FlexivBackend.cs` | `FlexivBackend : IRobotBackend`: solo le funzioni comuni a RDK 1.8 e 1.9 |
+| `src/RobotGateway.Flexiv/FlexivMapping.cs` | Conversioni di enum, stati, plan info ed eventi tra wrapper e Core |
+| `src/RobotGateway.Flexiv/NativeRdkLoader.cs` | Carica la DLL della versione configurata da `native/rdk-x.y/` |
+| `src/RobotGateway.Flexiv/EventLogCursor.cs` | Restituisce solo le voci nuove del log eventi del robot |
+| `src/RobotGateway.Flexiv/FlexivBackendOptions.cs` | Sezione `Robot:Flexiv` |
+
+**Compilazione nativa:** dalla cartella della soluzione, in PowerShell:
+
+```powershell
+./third_party/build-native.ps1 -RdkTag v1.8
 ```
-src/RobotGateway.Flexiv/
-  RobotGateway.Flexiv.csproj     x64, riferimento a RobotGateway.Core
-  FlexivBackend.cs               FlexivBackend : IRobotBackend
-  FlexivBackendOptions.cs        numero di serie del robot, interfacce di rete, timeout (sezione Robot:Flexiv)
-  Mapping.cs                     conversioni enum/array RDK <-> Core
-  Wrapper/                       sorgenti .cs del wrapper copiati e fissati a un commit preciso
-  native/                        DLL native compilate per la versione RDK del robot, copiate nella cartella di output
-```
 
-- **Versione:** il wrapper e le DLL native vanno allineati alla versione RDK compatibile con il software del robot. Registrare commit e versione in un `native/VERSION.txt`.
-- **Piattaforma:** solo x64. Nel `.csproj`: `<None Include="native\**" CopyToOutputDirectory="PreserveNewest" />`.
-- **Scelta del backend da configurazione** (`Robot:Backend = Mock | Flexiv`, default `Mock`), in `GatewayComposition.AddRobotGateway`: registra `MockBackend` oppure `FlexivBackend` come `IRobotBackend`. Il Mock resta per sviluppo e test.
+Lo script:
+1. clona flexiv_rdk al tag indicato (la libreria RDK precompilata viene scaricata dalla release GitHub ufficiale, con verifica SHA256);
+2. compila le dipendenze (Eigen, spdlog, tinyxml2, Fast-DDS, …);
+3. compila il wrapper.
 
-### 9.2 Corrispondenza `IRobotBackend` → RDK
+Richiede Visual Studio con il carico di lavoro C++ e Git per Windows. Lavora in `%USERPROFILE%\fxrdk`, fuori dal repo.
 
-Wrapper ufficiale: <https://github.com/flexivrobotics/flexiv_rdk_csharp> (`csharp/FlexivRdk/Robot.cs`). I nomi a destra sono quelli di quel wrapper (che segue l'API C++). Vanno riverificati sulla versione effettivamente scelta.
+Il wrapper upstream è scritto per RDK 1.9. Le funzioni assenti in 1.8 (`actions`, `reached_timeliness_failure_limit`, `SendMultiCartesianMotionForce`, `Device::enabled`, `Model::SyncKinematicsYAML`, firma di `SetTimelinessFailureLimit`) sono protette dalla macro `FLEXIV_RDK_API`. Il gateway non usa nessuna di queste funzioni.
 
-**Versione:** il CMake del repository indica RDK 1.9.3, ma lo script in `third_party` scarica flexiv_rdk v1.7. Le DLL native vanno ricompilate dal tag RDK che corrisponde al software del robot.
+### 9.3 Corrispondenza `IRobotBackend` → wrapper
 
-| `IRobotBackend` | Chiamata RDK | Note |
-|-----------------|--------------|------|
-| `Connect()` | costruzione `Robot(serial, …)` | Può bloccare alcuni secondi: avviene nel thread del worker, che in quel tempo non pubblica. Valutare un timeout |
-| `Disconnect()` / `Dispose()` | rilascio dell'oggetto `Robot` | |
-| `IsConnected` | `connected()` | Non deve lanciare eccezioni |
-| `IsOperational`, `OperationalStatus` | `operational()`, `operational_status()` | Mappare l'enum completo in `Mapping.cs` |
-| `IsFault`, `IsEStopReleased`, `IsBusy`, `Mode` | `fault()`, `estop_released()`, `busy()`, `mode()` | Secondo `robot.hpp`, `busy()` serve a capire se il plan è terminato: è il segnale usato per la fine ciclo |
-| `ReadStates()` | `states()` | Copiare gli array in `ImmutableArray`; unità invariate (rad, Nm, m + quaternione) |
-| `GetPlanList()`, `GetPlanInfo()` | `plan_list()`, `plan_info()` | Campi di `PlanInfo` da verificare |
-| `Enable()`, `ClearFault()` | `Enable()`, `ClearFault()` | Asincroni lato robot: lo stato arriva dal polling |
-| `SwitchMode(mode)` | `SwitchMode(Mode::…)` | |
+| `IRobotBackend` | Wrapper (`FlexivRdk.Robot`) | Note |
+|-----------------|-----------------------------|------|
+| `Connect()` | `new Robot(serial, interfaces, verbose, lite: false)` | Blocca finché il robot è trovato e connesso, o finché fallisce: in quel tempo il worker non pubblica (il robot non si muove, perché non connesso). Il numero di serie è accettato con o senza spazio ("Rizon 4-062609" / "Rizon4-062609") |
+| `Disconnect()` / `Dispose()` | `Dispose()` | |
+| `IsConnected` | `connected()` | Mai eccezioni |
+| `IsOperational`, `OperationalStatus` | `operational()`, `operational_status()` | Enum completo mappato |
+| `IsFault`, `IsEStopReleased`, `Mode` | `fault()`, `estop_released()`, `mode()` | |
+| `IsBusy` | `busy()` | Secondo `robot.hpp` indica se il plan è terminato: è il segnale di fine ciclo. **Da verificare** se resta vero in pausa |
+| `ReadStates()` | `states()` | Array tagliati sui DoF reali (`SystemDoF`); unità invariate |
+| `GetPlanList()`, `GetPlanInfo()` | `plan_list()`, `plan_info()` | |
+| `Enable()` | `Enable()` | Lo stato operativo arriva dal polling |
+| `ClearFault()` | `ClearFault(timeout)` | **Bloccante** fino a `ClearFaultTimeoutSeconds` (3 s); il robot è in fault, quindi fermo |
+| `SwitchMode(mode)` | `SwitchMode(...)` | Solo modi NRT; i modi RT non sono mai usati |
 | `SetVelocityScale(p)` | `SetVelocityScale(p)` | |
-| `ExecutePlan(name, false)` | `ExecutePlan(name, continue_exec)` | |
-| `PausePlan(bool)` | `PausePlan(bool)` | Verificare se `busy()` resta vero in pausa |
-| `StopPlan()` | `StopPlan()` | Corrisponde a `Robot::StopPlan()` in C++; valido in NRT_PLAN_EXECUTION |
+| `ExecutePlan(name, false)` | `ExecutePlan(name, false, blockUntilStarted: true)` | Ritorna a plan avviato (tipicamente < 200 ms) |
+| `PausePlan(bool)` | `PausePlan(bool)` | I plan interni (non creati dall'utente) non si possono riprendere |
+| `StopPlan()` | `StopPlan()` | NRT_PLAN_EXECUTION |
 | `Stop()` | `Stop()` | Ferma e porta in IDLE |
-| `DrainEventLog()` | `event_log()` | Restituisce `List<RobotEvent>`, ottenuta dal JSON di `GetEventLog` nativo. Convertire nel `RobotEvent` di Core e restituire solo le voci nuove |
+| `DrainEventLog()` | `event_log()` | **Da verificare** se il log è cumulativo; `EventLogCursor` passa comunque solo le voci nuove |
 
-Stranezza nota: `enabling_button_pressed()` chiama la funzione nativa `EnablingButtonReleased`, quindi il valore potrebbe essere invertito. Oggi non lo usiamo; se servirà, va verificato sul robot.
+Stranezza nota: `enabling_button_pressed()` chiama la funzione nativa `EnablingButtonReleased`, quindi il valore potrebbe essere invertito. Il gateway non la usa.
 
-### 9.3 Eccezioni
+### 9.4 Errori
 
-Il wrapper segnala gli errori come semplici `System.Exception`, con `[Flexiv RDK Error <codice>]` nel messaggio. `FlexivBackend` li converte:
-- Errori di comunicazione (link perso, timeout, robot non raggiungibile) → `RobotBackendException`. Il worker la interpreta come perdita di connessione e riconnette.
-- Comando rifiutato dal robot (modo errato, robot non operativo) → `InvalidOperationException` con il messaggio RDK. Il worker lo riporta come comando fallito, senza disconnettere.
-- La distinzione si fa sul codice di errore estratto dal messaggio. La tabella dei codici va presa dai sorgenti RDK della versione usata.
-- Nessuna eccezione deve uscire da `IsConnected`.
+Il wrapper segnala ogni errore nativo come `System.Exception` con `[Flexiv RDK Error 1] <messaggio>`. Il codice è sempre 1, e il tipo C++ dell'eccezione va perso. `FlexivBackend` decide quindi in base allo stato del collegamento subito dopo l'errore:
+- collegamento caduto → `RobotBackendException`: il worker la tratta come perdita di connessione e riconnette;
+- collegamento attivo → `InvalidOperationException` con il messaggio RDK (per esempio modo errato): il comando risulta fallito, senza disconnettere.
 
-### 9.4 Cosa non deve cambiare altrove
+### 9.5 Cosa non cambia
 
-- Core, Data, pagine, API e test esistenti restano invariati: vedono solo `IRobotBackend`.
-- Nessun altro progetto referenzia il wrapper o le DLL native.
-- Regola dei thread invariata: solo `RobotWorker` chiama il backend. Se il wrapper richiede chiamate sempre dallo stesso thread, è già garantito.
-- I test continuano a girare sul Mock. Per il robot reale conviene un piccolo gruppo di test separato (categoria `Hardware`), da lanciare a mano con il robot in modalità remota e la cella sgombra.
+- Core, Data, pagine, API e test esistenti vedono solo `IRobotBackend`.
+- Solo `RobotWorker` chiama il backend, sempre dallo stesso thread.
+- Nessuna abilitazione e nessun movimento all'avvio; STOP sempre disponibile.
+- I test girano sul Mock. Per il robot reale serve un gruppo di prove manuali, con il robot in modalità remota e la cella sgombra.
+
+### 9.6 Primo collegamento al robot reale (checklist)
+
+1. PC sulla rete del robot; da Flexiv Elements, RDK abilitato e robot in modalità di controllo remoto.
+2. DLL nativa presente in `src/RobotGateway.Flexiv/native/rdk-1.8/` (compilata con lo script).
+3. In `appsettings.json`: `Robot:Backend = Flexiv`; serial e `RdkVersion` sono già impostati.
+4. Avviare: il servizio si **connette soltanto**. Verificare su `/robot` lo stato, i giunti, i plan letti e gli eventi.
+5. Solo dopo: Enable dalla pagina Operator, poi un codice con un plan breve a velocità bassa, con la mano sull'arresto di emergenza.

@@ -4,8 +4,16 @@ project(FlexivRdkCSharp VERSION 1.9.3)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# LOCAL CHANGE: RDK version is a parameter (robot software 3.10 -> RDK 1.8, 3.11 -> RDK 1.9).
+set(FLEXIV_RDK_VERSION "1.9" CACHE STRING "flexiv_rdk version to build against (major.minor)")
+string(REPLACE "." ";" _rdk_ver_parts "${FLEXIV_RDK_VERSION}")
+list(GET _rdk_ver_parts 0 _rdk_major)
+list(GET _rdk_ver_parts 1 _rdk_minor)
+math(EXPR FLEXIV_RDK_API "${_rdk_major} * 100 + ${_rdk_minor}")
+message(STATUS "Building wrapper against flexiv_rdk ${FLEXIV_RDK_VERSION} (FLEXIV_RDK_API=${FLEXIV_RDK_API})")
+
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/install/rdk_install")
-find_package(flexiv_rdk 1.9.3 REQUIRED)
+find_package(flexiv_rdk ${FLEXIV_RDK_VERSION} REQUIRED)
 
 include(GNUInstallDirs)
 

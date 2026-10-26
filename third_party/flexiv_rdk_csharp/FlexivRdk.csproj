@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- LOCAL ADDITION: builds the vendored C# wrapper classes as a library (upstream ships them inside an example exe).
+       Upstream code is kept as-is, so nullable analysis and its warnings are off here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FlexivRdk</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningLevel>0</WarningLevel>
+    <NoWarn>$(NoWarn);CS0168;CS0219;CS0414;CS0649;CS0169;CS8981;CA1416;SYSLIB1054</NoWarn>
+    <!-- Only the wrapper classes: no examples, no build folders. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="csharp\FlexivRdk\*.cs" />
+  </ItemGroup>
+
+</Project>

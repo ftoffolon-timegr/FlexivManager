@@ -40,6 +40,9 @@ public enum OperationalStatus
     NotEnabled,
     ReleasingBrake,
     MinorFault,
+    CriticalFault,
     InReducedState,
     InRecoveryState,
+    InManualMode,
+    InAutoMode,
 }

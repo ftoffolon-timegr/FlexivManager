@@ -2,7 +2,11 @@
   <Folder Name="/src/">
     <Project Path="src/RobotGateway.Core/RobotGateway.Core.csproj" />
     <Project Path="src/RobotGateway.Data/RobotGateway.Data.csproj" />
+    <Project Path="src/RobotGateway.Flexiv/RobotGateway.Flexiv.csproj" />
     <Project Path="src/RobotGateway.Mock/RobotGateway.Mock.csproj" />
+  </Folder>
+  <Folder Name="/third_party/">
+    <Project Path="third_party/flexiv_rdk_csharp/FlexivRdk.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RobotGateway.Tests/RobotGateway.Tests.csproj" />

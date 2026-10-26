@@ -218,6 +218,31 @@ public sealed partial class HostingTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Backend_DefaultsToMock() =>
+        Assert.IsType<RobotGateway.Mock.MockBackend>(_operator.Services.GetRequiredService<IRobotBackend>());
+
+    [Fact]
+    public async Task FlexivBackend_IsSelectedByConfiguration_WithoutConnecting()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"hosting-test-{Guid.NewGuid():N}.db");
+        await using var app = BuildOperator(new()
+        {
+            ["Robot:Backend"] = "Flexiv",
+            ["Robot:Flexiv:SerialNumber"] = "Rizon4-062609",
+            ["Planning:DatabasePath"] = db,
+        });
+
+        var backend = app.Services.GetRequiredService<IRobotBackend>();
+        Assert.IsType<RobotGateway.Flexiv.FlexivBackend>(backend);
+        Assert.False(backend.IsConnected); // built, never started: no connection attempt
+        Assert.Contains("Rizon4-062609", backend.Name);
+    }
+
+    [Fact]
+    public void UnknownBackend_IsRefused() =>
+        Assert.Throws<InvalidOperationException>(() => BuildOperator(new() { ["Robot:Backend"] = "Bogus" }));
+
+    [Fact]
     public void PasswordHasher_VerifiesOnlyTheRightPassword()
     {
         Assert.True(PasswordHasher.Verify(Password, PasswordHash));

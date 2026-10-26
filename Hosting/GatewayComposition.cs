@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json.Serialization;
 using FlexivManager.Api;
 using FlexivManager.Components;
@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using RobotGateway.Core;
 using RobotGateway.Data;
+using RobotGateway.Flexiv;
 using RobotGateway.Mock;
 
 namespace FlexivManager.Hosting;
@@ -138,11 +139,24 @@ public static class GatewayComposition
             .Bind(configuration.GetSection(MockBackendOptions.SectionName));
         services.TryAddSingleton(TimeProvider.System);
 
-        // Only the mock backend exists for now: no real robot is ever contacted.
-        services.AddSingleton(sp => new MockBackend(
-            sp.GetRequiredService<IOptions<MockBackendOptions>>().Value,
-            sp.GetRequiredService<TimeProvider>()));
-        services.AddSingleton<IRobotBackend>(sp => sp.GetRequiredService<MockBackend>());
+        // Robot:Backend selects the robot: Mock (default, simulator) or Flexiv (real robot through the RDK wrapper).
+        var backend = configuration[$"{RobotWorkerOptions.SectionName}:Backend"] ?? "Mock";
+        if (backend.Equals("Flexiv", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddOptions<FlexivBackendOptions>().Bind(configuration.GetSection(FlexivBackendOptions.SectionName));
+            services.AddSingleton<IRobotBackend>(sp => new FlexivBackend(sp.GetRequiredService<IOptions<FlexivBackendOptions>>().Value));
+        }
+        else if (backend.Equals("Mock", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton(sp => new MockBackend(
+                sp.GetRequiredService<IOptions<MockBackendOptions>>().Value,
+                sp.GetRequiredService<TimeProvider>()));
+            services.AddSingleton<IRobotBackend>(sp => sp.GetRequiredService<MockBackend>());
+        }
+        else
+        {
+            throw new InvalidOperationException($"Robot:Backend '{backend}' is not supported (use Mock or Flexiv).");
+        }
 
         var storeOptions = configuration.GetSection(PlanningStoreOptions.SectionName).Get<PlanningStoreOptions>() ?? new();
         services.AddSqlitePlanningStore(Path.Combine(environment.ContentRootPath, storeOptions.DatabasePath));

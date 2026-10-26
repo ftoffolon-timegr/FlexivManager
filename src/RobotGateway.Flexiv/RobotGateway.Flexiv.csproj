@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RobotGateway.Core\RobotGateway.Core.csproj" />
+    <ProjectReference Include="..\..\third_party\flexiv_rdk_csharp\FlexivRdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RobotGateway.Tests" />
+  </ItemGroup>
+
+  <!-- Native wrapper DLLs, one folder per RDK version (built by third_party/build-native.ps1).
+       Copied to <output>/native/rdk-x.y/; FlexivBackend loads the folder chosen by Robot:Flexiv:RdkVersion. -->
+  <ItemGroup>
+    <None Include="native\**\*.dll;native\**\VERSION.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

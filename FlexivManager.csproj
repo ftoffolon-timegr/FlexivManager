@@ -6,13 +6,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <!-- The host lives in the solution root: keep the library/test folders out of its globs. -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;third_party/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="src\RobotGateway.Core\RobotGateway.Core.csproj" />
     <ProjectReference Include="src\RobotGateway.Mock\RobotGateway.Mock.csproj" />
     <ProjectReference Include="src\RobotGateway.Data\RobotGateway.Data.csproj" />
+    <ProjectReference Include="src\RobotGateway.Flexiv\RobotGateway.Flexiv.csproj" />
   </ItemGroup>
 
 </Project>
