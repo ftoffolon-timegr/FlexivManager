@@ -1,0 +1,268 @@
+﻿#ifndef WRAPPER_API_HPP_
+#define WRAPPER_API_HPP_
+#ifdef _WIN32
+#define EXPORT_API extern "C" __declspec(dllexport)
+#else
+#define EXPORT_API extern "C"
+#endif
+#include <iostream>
+#include <map>
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <functional>
+#include <thread>
+#include <algorithm>
+
+#include <spdlog\spdlog.h>
+#include <flexiv\rdk\data.hpp>
+#include <flexiv\rdk\robot.hpp>
+#include <flexiv\rdk\utility.hpp>
+#include <flexiv\rdk\tool.hpp>
+#include <flexiv\rdk\work_coord.hpp>
+#include <flexiv\rdk\gripper.hpp>
+#include <flexiv\rdk\file_io.hpp>
+#include <flexiv\rdk\device.hpp>
+#include <flexiv\rdk\maintenance.hpp>
+#include <flexiv\rdk\safety.hpp>
+#include <flexiv\rdk\model.hpp>
+#include "json.hpp"
+using json = nlohmann::json;
+using namespace flexiv::rdk;
+
+constexpr int kMaxSystemDoF = 32;
+
+struct FlexivError {
+	int error_code;
+	char error_msg[512];
+};
+
+struct WRobotInfo {
+	char serial_num[128];
+	char software_ver[128];
+	char model_name[128];
+	char license_type[128];
+	int Dof;
+	double K_x_nom[kCartDoF];
+	double K_q_nom[kSerialJointDoF];
+	double q_min[kSerialJointDoF];
+	double q_max[kSerialJointDoF];
+	double dq_max[kSerialJointDoF];
+	double tau_max[kSerialJointDoF];
+	int has_FT_sensor;
+};
+
+struct WRobotState {
+	int64_t sec;
+	int32_t nsec;
+	// Actual DoF of the full system, external axes + robot manipulator.
+	int32_t system_dof;
+
+	double q[kMaxSystemDoF];
+	double theta[kMaxSystemDoF];
+	double dq[kMaxSystemDoF];
+	double dtheta[kMaxSystemDoF];
+	double tau[kMaxSystemDoF];
+	double tau_dot[kMaxSystemDoF];
+	double tau_ext[kMaxSystemDoF];
+	double tau_interact[kMaxSystemDoF];
+	double temperature[kMaxSystemDoF];
+
+	double tcp_pose[kPoseSize];
+	double tcp_vel[kCartDoF];
+	double flange_pose[kPoseSize];
+	double ft_sensor_raw[kCartDoF];
+	double ext_wrench_in_tcp[kCartDoF];
+	double ext_wrench_in_world[kCartDoF];
+	double ext_wrench_in_tcp_raw[kCartDoF];
+	double ext_wrench_in_world_raw[kCartDoF];
+};
+
+struct WRobotActions {
+	int32_t system_dof;
+	double q_d[kMaxSystemDoF];
+	double dq_d[kMaxSystemDoF];
+	double tau_d[kMaxSystemDoF];
+	double tcp_pose_d[kPoseSize];
+	double tcp_vel_d[kCartDoF];
+	double ext_wrench_d[kCartDoF];
+};
+
+struct WPlanInfo {
+	char pt_name[128];
+	char node_name[128];
+	char node_path[512];
+	char node_path_time_period[128];
+	char node_path_number[128];
+	char assigned_plan_name[128];
+	double velocity_scale;
+	int waiting_for_step;
+};
+
+struct WToolParams {
+	double Mass;
+	double CoM[3];
+	double Intertia[6];
+	double TcpLocation[kPoseSize];
+};
+
+struct WGripperParams {
+	char name[256];
+	double min_width;
+	double max_width;
+	double min_vel;
+	double max_vel;
+	double min_force;
+	double max_force;
+};
+
+struct WGripperStates {
+	double width;
+	double force;
+	int is_moving;
+};
+
+struct WSafetyLimits {
+	double q_min[kSerialJointDoF];
+	double q_max[kSerialJointDoF];
+	double dq_max_normal[kSerialJointDoF];
+	double dq_max_reduced[kSerialJointDoF];
+};
+
+void CopyExceptionMsg(const std::exception& e, FlexivError* error) {
+	std::strncpy(error->error_msg, e.what(), sizeof(error->error_msg) - 1);
+	error->error_msg[sizeof(error->error_msg) - 1] = '\0';
+}
+
+char* CopyInputString(const char* input) {
+	if (!input) return nullptr;
+	size_t len = std::strlen(input);
+	char* buf = new char[len + 1];
+	std::strcpy(buf, input);
+	return buf;
+}
+
+void CopyMsgSrc2Dst(const char* src, char* dst, size_t dstSize) {
+	std::strncpy(dst, src, dstSize - 1);
+	dst[dstSize - 1] = '\0';
+}
+
+namespace flexiv::rdk {
+	NLOHMANN_JSON_SERIALIZE_ENUM(RobotEvent::Level, {
+		{ RobotEvent::Level::UNKNOWN, "UNKNOWN" },
+		{ RobotEvent::Level::INFO, "INFO" },
+		{ RobotEvent::Level::WARNING, "WARNING" },
+		{ RobotEvent::Level::ERROR, "ERROR" },
+		{ RobotEvent::Level::CRITICAL, "CRITICAL" },
+	})
+
+	inline void to_json(json& j, const RobotEvent& event) {
+		using namespace std::chrono;
+		j = json{
+			{"Level", event.level},
+			{"ID", event.id},
+			{"Description", event.description},
+			{"Consequence", event.consequences},
+			{"ProbableCause", event.probable_causes},
+			{"RecommendedActions", event.recommended_actions},
+			{"Timestamp", duration_cast<milliseconds>(event.timestamp.time_since_epoch()).count()}
+		};
+	}
+
+	inline void from_json(const json& j, JPos& pos) {
+		j.at("q_m").get_to(pos.q_m);
+		j.at("q_e").get_to(pos.q_e);
+	}
+
+	inline void to_json(json& j, const JPos& pos) {
+		j = json{
+			{"q_m", pos.q_m},
+			{"q_e", pos.q_e}
+		};
+	}
+
+	inline void from_json(const json& j, Coord& coord) {
+		j.at("position").get_to(coord.position);
+		j.at("orientation").get_to(coord.orientation);
+		j.at("ref_frame").get_to(coord.ref_frame);
+		j.at("ref_q_m").get_to(coord.ref_q_m);
+		j.at("ref_q_e").get_to(coord.ref_q_e);
+	}
+
+	inline void to_json(json& j, const Coord& coord) {
+		j = json{
+			{"position", coord.position},
+			{"orientation", coord.orientation},
+			{"ref_frame", coord.ref_frame},
+			{"ref_q_m", coord.ref_q_m},
+			{"ref_q_e", coord.ref_q_e}
+		};
+	}
+}
+
+using ParserFunc = std::function<FlexivDataTypes(const nlohmann::json&)>;
+const std::unordered_map<std::string, ParserFunc> kTypeParsers = {
+	{ "Int",          [](const json& j) { return j.get<int>(); } },
+	{ "Double",       [](const json& j) { return j.get<double>(); } },
+	{ "String",       [](const json& j) { return j.get<std::string>(); } },
+	{ "JPos",         [](const json& j) { return j.get<JPos>(); } },
+	{ "Coord",        [](const json& j) { return j.get<Coord>(); } },
+	{ "VectorInt",    [](const json& j) { return j.get<std::vector<int>>(); } },
+	{ "VectorDouble", [](const json& j) { return j.get<std::vector<double>>(); } },
+	{ "VectorString", [](const json& j) { return j.get<std::vector<std::string>>(); } },
+	{ "VectorJPos",   [](const json& j) { return j.get<std::vector<JPos>>(); } },
+	{ "VectorCoord",  [](const json& j) { return j.get<std::vector<Coord>>(); } }
+};
+
+FlexivDataTypes parseValue(const std::string& type, const json& value) {
+	auto iter = kTypeParsers.find(type);
+	if (iter != kTypeParsers.end()) {
+		return iter->second(value);
+	}
+	else {
+		throw std::runtime_error("Unsupported type: " + type);
+	}
+}
+
+std::map<std::string, FlexivDataTypes> parseJsonToParams(const char* json_str) {
+	json json_obj = json::parse(json_str);
+	std::map<std::string, FlexivDataTypes> params;
+	for (auto& [key, val] : json_obj.items()) {
+		std::string type = val.at("type").get<std::string>();
+		FlexivDataTypes data = parseValue(type, val.at("value"));
+		params[key] = std::move(data);
+	}
+	return params;
+}
+
+std::string getTypeName(const FlexivDataTypes& value) {
+	return std::visit([](auto&& val) -> std::string {
+		using T = std::decay_t<decltype(val)>;
+		if constexpr (std::is_same_v<T, int>) return "Int";
+		else if constexpr (std::is_same_v<T, double>) return "Double";
+		else if constexpr (std::is_same_v<T, std::string>) return "String";
+		else if constexpr (std::is_same_v<T, JPos>) return "JPos";
+		else if constexpr (std::is_same_v<T, Coord>) return "Coord";
+		else if constexpr (std::is_same_v<T, std::vector<int>>) return "VectorInt";
+		else if constexpr (std::is_same_v<T, std::vector<double>>) return "VectorDouble";
+		else if constexpr (std::is_same_v<T, std::vector<std::string>>) return "VectorString";
+		else if constexpr (std::is_same_v<T, std::vector<JPos>>) return "VectorJPos";
+		else if constexpr (std::is_same_v<T, std::vector<Coord>>) return "VectorCoord";
+		else return "Unknown"; }, value);
+}
+
+std::string serializeParams(const std::map<std::string, FlexivDataTypes>& params) {
+	json j;
+	std::string type_name;
+	for (const auto& iter : params) {
+		type_name = getTypeName(iter.second);
+		std::visit([&](const auto& v) {
+			j[iter.first] = {
+				{"type", type_name},
+				{"value", v}
+			}; }, iter.second);
+	}
+	return j.dump();
+}
+
+#endif  // !wrapper_api.hpp

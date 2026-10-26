@@ -1,0 +1,568 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+
+namespace FlexivRdk
+{
+    public class Robot : IDisposable
+    {
+        private bool _disposed = false;
+        private IntPtr _flexivRobotPtr;
+        private JsonSerializerOptions _options;
+        public IntPtr NativePtr => _flexivRobotPtr;
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (_disposed) return;
+            if (disposing)
+            {
+                if (_options != null) _options = null;
+            }
+            if (_flexivRobotPtr != IntPtr.Zero)
+            {
+                NativeFlexivRdk.DeleteFlexivRobot(_flexivRobotPtr);
+                _flexivRobotPtr = IntPtr.Zero;
+            }
+            _disposed = true;
+        }
+
+        private static void ThrowRdkException(FlexivError error)
+        {
+            if (error.error_code != 0)
+            {
+                string message = error.error_msg?.TrimEnd('\0') ?? "Unknown error";
+                throw new Exception($"[Flexiv RDK Error {error.error_code}] {message}");
+            }
+        }
+
+        public Robot(string robotSN, string[] networkInterfaceWhiteList = null, bool verbose = true, bool lite = false)
+        {
+            FlexivError error = new();
+            string[] interfaces = networkInterfaceWhiteList ?? Array.Empty<string>();
+            _flexivRobotPtr = NativeFlexivRdk.CreateFlexivRobot(robotSN,
+                                                                interfaces,
+                                                                interfaces.Length,
+                                                                verbose ? 1 : 0,
+                                                                lite ? 1 : 0,
+                                                                ref error);
+            _options = new JsonSerializerOptions
+            {
+                WriteIndented = false,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                Converters = { new FlexivDataTypesJsonConverter() }
+            };
+            ThrowRdkException(error);
+        }
+
+        ~Robot() => Dispose(false);
+
+        //========================================= ACCESSORS ==========================================
+        public bool lite()
+        {
+            return NativeFlexivRdk.IsLite(_flexivRobotPtr) != 0;
+        }
+
+        public bool connected()
+        {
+            return NativeFlexivRdk.IsConnected(_flexivRobotPtr) != 0;
+        }
+
+        public RobotInfo info()
+        {
+            RobotInfo robotInfo = new();
+            NativeFlexivRdk.GetInfo(_flexivRobotPtr, ref robotInfo);
+            return robotInfo;
+        }
+
+        public RobotMode mode()
+        {
+            return (RobotMode)NativeFlexivRdk.GetMode(_flexivRobotPtr);
+        }
+
+        public RobotStates states()
+        {
+            RobotStates robot_state = new();
+            FlexivError error = new();
+            NativeFlexivRdk.GetStates(_flexivRobotPtr, ref robot_state, ref error);
+            ThrowRdkException(error);
+            return robot_state;
+        }
+
+        public RobotActions actions()
+        {
+            RobotActions robotActions = new();
+            FlexivError error = new();
+            NativeFlexivRdk.GetActions(_flexivRobotPtr, ref robotActions, ref error);
+            ThrowRdkException(error);
+            return robotActions;
+        }
+
+        public bool stopped()
+        {
+            return NativeFlexivRdk.IsStopped(_flexivRobotPtr) != 0;
+        }
+
+        public bool operational()
+        {
+            return NativeFlexivRdk.IsOperational(_flexivRobotPtr) != 0;
+        }
+
+        public OperationalStatus operational_status()
+        {
+            return (OperationalStatus)NativeFlexivRdk.GetOperationalStatus(_flexivRobotPtr);
+        }
+
+        public bool busy()
+        {
+            return NativeFlexivRdk.IsBusy(_flexivRobotPtr) != 0;
+        }
+
+        public bool fault()
+        {
+            return NativeFlexivRdk.IsFault(_flexivRobotPtr) != 0;
+        }
+
+        public bool reduced()
+        {
+            return NativeFlexivRdk.IsReduced(_flexivRobotPtr) != 0;
+        }
+
+        public bool recovery()
+        {
+            return NativeFlexivRdk.IsRecovery(_flexivRobotPtr) != 0;
+        }
+
+        public bool estop_released()
+        {
+            return NativeFlexivRdk.IsEstopReleased(_flexivRobotPtr) != 0;
+        }
+
+        public bool reached_timeliness_failure_limit()
+        {
+            return NativeFlexivRdk.ReachedTimelinessFailureLimit(_flexivRobotPtr) != 0;
+        }
+
+        public bool enabling_button_pressed()
+        {
+            return NativeFlexivRdk.EnablingButtonReleased(_flexivRobotPtr) != 0;
+        }
+
+        public List<RobotEvent> event_log()
+        {
+            IntPtr ptr = NativeFlexivRdk.GetEventLog(_flexivRobotPtr);
+            string str = Marshal.PtrToStringAnsi(ptr);
+            NativeFlexivRdk.FreeString(ptr);
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = false,
+                PropertyNameCaseInsensitive = true,
+            };
+            List<RobotEvent> ret = JsonSerializer.Deserialize<List<RobotEvent>>(str, options);
+            return new List<RobotEvent>(ret);
+        }
+
+        //======================================= SYSTEM CONTROL =======================================
+        public void Enable()
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.Enable(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void Brake(bool engage)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.Brake(_flexivRobotPtr, engage ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SwitchMode(RobotMode mode)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SwitchMode(_flexivRobotPtr, ((int)mode), ref error);
+            ThrowRdkException(error);
+        }
+
+        public void Stop()
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.Stop(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+        }
+
+        public bool ClearFault(int timeoutSec = 30)
+        {
+            FlexivError error = new();
+            int flag = NativeFlexivRdk.ClearFault(_flexivRobotPtr, timeoutSec, ref error);
+            ThrowRdkException(error);
+            return flag != 0;
+        }
+
+        public void RunAutoRecovery()
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.RunAutoRecovery(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetGlobalVariables(Dictionary<string, FlexivDataTypes> globalVars)
+        {
+            FlexivError error = new();
+            string json_str = JsonSerializer.Serialize(globalVars, _options);
+            NativeFlexivRdk.SetGlobalVariables(_flexivRobotPtr, json_str, ref error);
+            ThrowRdkException(error);
+        }
+
+        public Dictionary<string, FlexivDataTypes> global_variables()
+        {
+            FlexivError error = new();
+            IntPtr ptr = NativeFlexivRdk.GetGlobalVariables(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+            string str = Marshal.PtrToStringAnsi(ptr);
+            NativeFlexivRdk.FreeString(ptr);
+            var tmp = JsonSerializer.Deserialize<Dictionary<string, FlexivDataTypes>>(str, _options);
+            if (tmp == null) tmp = new Dictionary<string, FlexivDataTypes>();
+            return new Dictionary<string, FlexivDataTypes>(tmp);
+        }
+
+        public void LockExternalAxes(bool toggle)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.LockExternalAxes(_flexivRobotPtr, toggle ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SyncWithPositioner(bool toggle)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SyncWithPositioner(_flexivRobotPtr, toggle ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetTimelinessFailureLimit(double limit = 2.0)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetTimelinessFailureLimit(_flexivRobotPtr, limit, ref error);
+            ThrowRdkException(error);
+        }
+
+        //======================================= PLAN EXECUTION =======================================
+        public void ExecutePlan(int index, bool continueExec = false, bool blockUntilStarted = true)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.ExecutePlanByIdx(_flexivRobotPtr, index, continueExec ? 1 : 0, blockUntilStarted ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void ExecutePlan(string name, bool continueExec = false, bool blockUntilStarted = true)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.ExecutePlanByName(_flexivRobotPtr, name, continueExec ? 1 : 0, blockUntilStarted ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void PausePlan(bool pause)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.PausePlan(_flexivRobotPtr, pause ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void StopPlan()
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.StopPlan(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+        }
+
+        public List<string> plan_list()
+        {
+            FlexivError error = new();
+            IntPtr ptr = NativeFlexivRdk.GetPlanList(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+            string str = Marshal.PtrToStringAnsi(ptr);
+            NativeFlexivRdk.FreeString(ptr);
+            var tmp = JsonSerializer.Deserialize<Dictionary<string, FlexivDataTypes>>(str, _options);
+            string json = JsonSerializer.Serialize(tmp, _options);
+            var ret = (List<string>)(tmp["plan_list"]);
+            return new List<string>(ret);
+        }
+
+        public PlanInfo plan_info()
+        {
+            PlanInfo plan_info = new();
+            FlexivError error = new FlexivError();
+            NativeFlexivRdk.GetPlanInfo(_flexivRobotPtr, ref plan_info, ref error);
+            ThrowRdkException(error);
+            return plan_info;
+        }
+
+        public void SetBreakpointMode(bool IsEnable)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetBreakpointMode(_flexivRobotPtr, IsEnable ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void StepBreakpoint()
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.StepBreakpoint(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetVelocityScale(int velocityScale)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetVelocityScale(_flexivRobotPtr, velocityScale, ref error);
+            ThrowRdkException(error);
+        }
+
+        //==================================== PRIMITIVE EXECUTION =====================================
+        public void ExecutePrimitive(string primitiveName,
+            Dictionary<string, FlexivDataTypes> inputParams,
+            bool blockUntilStarted = true)
+        {
+            FlexivError error = new();
+            string input_params = JsonSerializer.Serialize(inputParams, _options);
+            NativeFlexivRdk.ExecutePrimitive(_flexivRobotPtr, primitiveName,
+                input_params, blockUntilStarted ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public Dictionary<string, FlexivDataTypes> primitive_states()
+        {
+            FlexivError error = new();
+            IntPtr ptr = NativeFlexivRdk.GetPrimitiveStates(_flexivRobotPtr, ref error);
+            ThrowRdkException(error);
+            string str = Marshal.PtrToStringAnsi(ptr);
+            NativeFlexivRdk.FreeString(ptr);
+            var tmp = JsonSerializer.Deserialize<Dictionary<string, FlexivDataTypes>>(str, _options);
+            if (tmp == null) tmp = new Dictionary<string, FlexivDataTypes>();
+            return new Dictionary<string, FlexivDataTypes>(tmp);
+        }
+
+        //==================================== DIRECT JOINT CONTROL ====================================
+        public void StreamJointTorque(double[] torques, bool enableGravityComp = true, bool enableSoftLimits = true, double friction_comp_scale = 100.0)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.StreamJointTorque(_flexivRobotPtr, torques, torques.Length,
+                enableGravityComp ? 1 : 0, enableSoftLimits ? 1 : 0, friction_comp_scale, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void StreamJointPosition(double[] positions, double[] velocities, double[] accelerations)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.StreamJointPosition(_flexivRobotPtr, positions, positions.Length, velocities, velocities.Length,
+                accelerations, accelerations.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SendJointPosition(double[] positions, double[] velocities,
+            double[] maxVel, double[] maxAcc)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SendJointPosition(_flexivRobotPtr, positions, positions.Length, velocities,
+                velocities.Length, maxVel, maxVel.Length,
+                maxAcc, maxAcc.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetJointImpedance(double[] Kq, double[] Zq = null)
+        {
+            FlexivError error = new();
+            if (Zq == null) Zq = new double[] { 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7 };
+            NativeFlexivRdk.SetJointImpedance(_flexivRobotPtr, Kq, Kq.Length, Zq, Zq.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetMaxContactTorque(double[] maxTorques)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetMaxContactTorque(_flexivRobotPtr, maxTorques, maxTorques.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetJointInertiaScale(double[] inertia_scales)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetJointInertiaScale(_flexivRobotPtr, inertia_scales, inertia_scales.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void StreamCartesianMotionForce(double[] pose,
+            double[] wrench = null, double[] velocity = null, double[] acceleration = null)
+        {
+            FlexivError error = new();
+            if (wrench == null) wrench = new double[] { 0, 0, 0, 0, 0, 0 };
+            if (velocity == null) velocity = new double[] { 0, 0, 0, 0, 0, 0 };
+            if (acceleration == null) acceleration = new double[] { 0, 0, 0, 0, 0, 0 };
+            NativeFlexivRdk.StreamCartesianMotionForce(_flexivRobotPtr, pose, pose.Length,
+                wrench, wrench.Length, velocity, velocity.Length, acceleration, acceleration.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SendCartesianMotionForce(double[] pose, double[] wrench = null, double[] velocity = null,
+            double maxLinearVel = 0.5, double maxAngularVel = 1.0, double maxLinearAcc = 2.0, double maxAngularAcc = 5.0)
+        {
+            FlexivError error = new();
+            if (wrench == null) wrench = new double[] { 0, 0, 0, 0, 0, 0 };
+            if (velocity == null) velocity = new double[6];
+            NativeFlexivRdk.SendCartesianMotionForce(_flexivRobotPtr, pose, pose.Length, wrench, wrench.Length,
+                velocity, velocity.Length, maxLinearVel, maxAngularVel, maxLinearAcc, maxAngularAcc, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SendMultiCartesianMotionForce(IReadOnlyList<NrtCartesianCmd> cartCmds, IReadOnlyList<double[]> jointPos)
+        {
+            if (cartCmds == null || cartCmds.Count == 0)
+            {
+                throw new ArgumentException("cartCmds cannot be null or empty.", nameof(cartCmds));
+            }
+            if (jointPos == null || jointPos.Count == 0)
+            {
+                throw new ArgumentException("jointPos cannot be null or empty.", nameof(jointPos));
+            }
+            if (cartCmds.Count != jointPos.Count)
+            {
+                throw new ArgumentException("cartCmds and jointPos must contain the same number of waypoints.");
+            }
+            int waypointCount = cartCmds.Count;
+            // Official API requires each joint waypoint to contain RobotInfo::DoF values.
+            int systemDof = info().DoF;
+            for (int i = 0; i < waypointCount; ++i)
+            {
+                if (cartCmds[i] == null)
+                {
+                    throw new ArgumentException($"cartCmds[{i}] cannot be null.", nameof(cartCmds));
+                }
+                if (jointPos[i] == null)
+                {
+                    throw new ArgumentException($"jointPos[{i}] cannot be null.", nameof(jointPos));
+                }
+                if (jointPos[i].Length != systemDof)
+                {
+                    throw new ArgumentException(
+                        $"jointPos[{i}] must contain {systemDof} values, " +
+                        $"but contains {jointPos[i].Length}.",
+                        nameof(jointPos));
+                }
+            }
+
+            double[] poses = new double[waypointCount * FlexivConstants.kPoseSize];
+            double[] wrenches = new double[waypointCount * FlexivConstants.kCartDoF];
+            double[] twists = new double[waypointCount * FlexivConstants.kCartDoF];
+            double[] maxLinearVels = new double[waypointCount];
+            double[] maxAngularVels = new double[waypointCount];
+            double[] maxLinearAccs = new double[waypointCount];
+            double[] maxAngularAccs = new double[waypointCount];
+            double[] jointPosFlat = new double[waypointCount * systemDof];
+            for (int i = 0; i < waypointCount; ++i)
+            {
+                NrtCartesianCmd cmd = cartCmds[i];
+                Array.Copy(cmd.PoseD, 0, poses, i * FlexivConstants.kPoseSize, FlexivConstants.kPoseSize);
+                Array.Copy(cmd.WrenchD, 0, wrenches, i * FlexivConstants.kCartDoF, FlexivConstants.kCartDoF);
+                Array.Copy(cmd.TwistD, 0, twists, i * FlexivConstants.kCartDoF, FlexivConstants.kCartDoF);
+                maxLinearVels[i] = cmd.MaxLinearVel;
+                maxAngularVels[i] = cmd.MaxAngularVel;
+                maxLinearAccs[i] = cmd.MaxLinearAcc;
+                maxAngularAccs[i] = cmd.MaxAngularAcc;
+                Array.Copy(jointPos[i], 0, jointPosFlat, i * systemDof, systemDof);
+            }
+            FlexivError error = new();
+            NativeFlexivRdk.SendMultiCartesianMotionForce(
+                _flexivRobotPtr,
+                poses, poses.Length,
+                wrenches, wrenches.Length,
+                twists, twists.Length,
+                maxLinearVels, maxLinearVels.Length,
+                maxAngularVels, maxAngularVels.Length,
+                maxLinearAccs, maxLinearAccs.Length,
+                maxAngularAccs, maxAngularAccs.Length,
+                jointPosFlat, jointPosFlat.Length,
+                waypointCount,
+                ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetCartesianImpedance(double[] Kx, double[] Zx = null)
+        {
+            FlexivError error = new();
+            if (Zx == null) Zx = new double[] { 0.7, 0.7, 0.7, 0.7, 0.7, 0.7 };
+            NativeFlexivRdk.SetCartesianImpedance(_flexivRobotPtr, Kx, Kx.Length, Zx, Zx.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetMaxContactWrench(double[] maxWrench)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetMaxContactWrench(_flexivRobotPtr, maxWrench, maxWrench.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetNullSpacePosture(double[] refPositions)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetNullSpacePosture(_flexivRobotPtr, refPositions, refPositions.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetNullSpaceObjectives(double linearManipulability = 0.0, double angularManipulability = 0.0, double refPositionsTracking = 0.5)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetNullSpaceObjectives(_flexivRobotPtr, linearManipulability, angularManipulability, refPositionsTracking, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetForceControlAxis(bool[] enabledAxes, double[] maxLinearVel = null)
+        {
+            if (maxLinearVel == null) maxLinearVel = new double[] { 1.0, 1.0, 1.0 };
+            int[] intArray = new int[enabledAxes.Length];
+            for (int i = 0; i < enabledAxes.Length; ++i)
+                intArray[i] = enabledAxes[i] ? 1 : 0;
+            FlexivError error = new();
+            NativeFlexivRdk.SetForceControlAxis(_flexivRobotPtr, intArray, intArray.Length, maxLinearVel, maxLinearVel.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetForceControlFrame(CoordType rootCoord, double[] TInRoot = null)
+        {
+            if (TInRoot == null) TInRoot = new double[] { 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0 };
+            FlexivError error = new();
+            NativeFlexivRdk.SetForceControlFrame(_flexivRobotPtr, (int)rootCoord, TInRoot, TInRoot.Length, ref error);
+            ThrowRdkException(error);
+        }
+
+        public void SetPassiveForceControl(bool IsEnabled)
+        {
+            FlexivError error = new();
+            NativeFlexivRdk.SetPassiveForceControl(_flexivRobotPtr, IsEnabled ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        //======================================== IO CONTROL ========================================
+        public void SetDigitalOutput(int idx, bool value)
+        {
+            if (idx < 0 || idx >= FlexivConstants.kIOPorts)
+                throw new ArgumentOutOfRangeException(nameof(idx), $"Index must be in range [0, {FlexivConstants.kIOPorts - 1}]");
+            FlexivError error = new();
+            NativeFlexivRdk.SetDigitalOutput(_flexivRobotPtr, idx, value ? 1 : 0, ref error);
+            ThrowRdkException(error);
+        }
+
+        public bool GetDigitalInput(int idx)
+        {
+            if (idx < 0 || idx >= FlexivConstants.kIOPorts)
+                throw new ArgumentOutOfRangeException(nameof(idx), $"Index must be in range [0, {FlexivConstants.kIOPorts - 1}]");
+            int flag = NativeFlexivRdk.GetDigitalInput(_flexivRobotPtr, idx);
+            return flag != 0;
+        }
+    }
+}

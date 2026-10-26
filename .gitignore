@@ -486,3 +486,6 @@ $RECYCLE.BIN/
 
 # Local planning database
 data/
+
+# Upstream clones used to build the native RDK wrapper
+third_party/_src/
