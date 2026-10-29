@@ -20,8 +20,13 @@ param(
     [int]$Jobs = 8,
     # Network failures while cloning the dependencies are retried.
     [int]$Retries = 3,
-    [int]$RetryDelaySeconds = 120
+    [int]$RetryDelaySeconds = 120,
+    # Eigen's home (gitlab.com) often refuses clones under load: Eigen is pre-cloned from this mirror instead.
+    # The checkout is accepted only if it is the official 3.4.0 commit, so the mirror does not need to be trusted.
+    [string]$EigenUrl = "https://github.com/eigen-mirror/eigen.git"
 )
+$EigenTag = "3.4.0"                                          # version pinned by flexiv_rdk's install_eigen.sh
+$EigenCommit = "3147391d946bb4b6c68edd901f2add6ac1f31f8c"    # official Eigen 3.4.0 commit
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path $PSScriptRoot -Parent
@@ -69,6 +74,22 @@ if (-not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
                 }
             }
         }
+        # install_eigen.sh clones from gitlab.com only if cloned/eigen does not exist: provide it from the mirror.
+        $eigenDir = Join-Path $cloned "eigen"
+        $eigenHead = if (Test-Path $eigenDir) { git -C $eigenDir rev-parse --verify --quiet "refs/tags/$EigenTag^{commit}" 2>$null } else { $null }
+        if ($eigenHead -ne $EigenCommit) {
+            if (Test-Path $eigenDir) { Remove-Item $eigenDir -Recurse -Force }
+            Step "Cloning Eigen $EigenTag from $EigenUrl"
+            New-Item -ItemType Directory -Force $cloned | Out-Null
+            Run git @("clone", "--branch", $EigenTag, "--depth", "1", $EigenUrl, $eigenDir)
+            $eigenHead = (git -C $eigenDir rev-parse HEAD).Trim()
+            if ($eigenHead -ne $EigenCommit) {
+                Remove-Item $eigenDir -Recurse -Force
+                throw "Eigen from $EigenUrl is at $eigenHead, expected the official $EigenTag commit $EigenCommit. Use another -EigenUrl."
+            }
+        }
+        Write-Host "Eigen $EigenTag verified ($EigenCommit)"
+
         Push-Location (Join-Path $rdkSrc "thirdparty")
         try {
             & $bash build_and_install_dependencies.sh ($install -replace "\\", "/") "$Jobs"
