@@ -52,7 +52,8 @@
                         <option value="">-- choose code --</option>
                         @foreach (var job in _jobs.Where(j => j.Enabled))
                         {
-                            <option value="@job.ProductCode">@job.ProductCode → @job.PlanName</option>
+                            var jobOnRobot = s.AvailablePlans.Contains(job.PlanName);
+                            <option value="@job.ProductCode" disabled="@(!jobOnRobot)">@job.ProductCode → @job.PlanName@(jobOnRobot ? "" : " (plan not on robot)")</option>
                         }
                     </select>
                     <button class="btn btn-outline-secondary" disabled="@(running || activeOrder is not null || string.IsNullOrEmpty(_manualCode))" @onclick="SelectManualAsync">Load</button>
@@ -109,6 +110,13 @@
                             @onclick="StartAsync">
                         <i class="bi bi-play-circle-fill" aria-hidden="true"></i> @(repeat ? "Start next cycle" : "Start…")
                     </button>
+                    @if (!onRobot)
+                    {
+                        <div class="small text-danger mt-1">
+                            Plan <code>@job.PlanName</code> is not stored on this robot: start is disabled.
+                            Associate the code with an existing plan on the remote planning station.
+                        </div>
+                    }
                     @if (s.State != RobotServiceState.Operational && !running)
                     {
                         <div class="small text-muted mt-1">Start requires OPERATIONAL (now @RobotStateStyle.Label(s.State)).</div>
@@ -209,7 +217,20 @@
                         <tr class="@(selected ? "table-active" : "")">
                             <td>@(i + 1)</td>
                             <td class="fw-semibold">@o.OrderNumber @if (i == 0) {<span class="badge text-bg-info ms-1">current</span>}</td>
-                            <td>@o.ProductCode</td>
+                            <td>
+                                @o.ProductCode
+                                @{
+                                    var orderJob = _jobs.FirstOrDefault(j => j.ProductCode == o.ProductCode);
+                                }
+                                @if (orderJob is null)
+                                {
+                                    <span class="badge text-bg-danger ms-1">no job</span>
+                                }
+                                else if (!s.AvailablePlans.Contains(orderJob.PlanName))
+                                {
+                                    <span class="badge text-bg-warning ms-1" title="Plan @orderJob.PlanName is not stored on the robot">plan not on robot</span>
+                                }
+                            </td>
                             <td>@o.CompletedCount / @o.Quantity</td>
                             <td>@o.Status</td>
                             <td class="text-end">

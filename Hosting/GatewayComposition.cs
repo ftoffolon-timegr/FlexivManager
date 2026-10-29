@@ -158,8 +158,7 @@ public static class GatewayComposition
             throw new InvalidOperationException($"Robot:Backend '{backend}' is not supported (use Mock or Flexiv).");
         }
 
-        var storeOptions = configuration.GetSection(PlanningStoreOptions.SectionName).Get<PlanningStoreOptions>() ?? new();
-        services.AddSqlitePlanningStore(Path.Combine(environment.ContentRootPath, storeOptions.DatabasePath));
+        services.AddSqlitePlanningStore(Path.Combine(environment.ContentRootPath, DatabasePath(configuration)));
         // Local station reads planning data; edits exist only on the monitoring host.
         services.AddSingleton<IPlanningReader>(sp => sp.GetRequiredService<SqlitePlanningStore>());
 
@@ -177,12 +176,29 @@ public static class GatewayComposition
             sp.GetRequiredService<ILogger<CycleRecorder>>()));
     }
 
+    private static bool IsRealRobot(IConfiguration configuration) =>
+        string.Equals(configuration[$"{RobotWorkerOptions.SectionName}:Backend"], "Flexiv", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Planning:DatabasePath; with the real robot "-flexiv" is appended to the file name, so codes created for
+    /// the simulator (and the demo data) never show up on the real robot and vice versa.
+    /// </summary>
+    public static string DatabasePath(IConfiguration configuration)
+    {
+        var path = (configuration.GetSection(PlanningStoreOptions.SectionName).Get<PlanningStoreOptions>() ?? new()).DatabasePath;
+        if (!IsRealRobot(configuration))
+            return path;
+        var directory = Path.GetDirectoryName(path) ?? "";
+        return Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(path)}-flexiv{Path.GetExtension(path)}");
+    }
+
     private static void InitializeDatabase(IServiceProvider services, IConfiguration configuration)
     {
         var store = services.GetRequiredService<SqlitePlanningStore>();
         store.EnsureCreated();
         var options = configuration.GetSection(PlanningStoreOptions.SectionName).Get<PlanningStoreOptions>() ?? new();
-        if (options.SeedDemoData)
+        // Demo codes point to simulator plans: never put them in front of an operator on the real robot.
+        if (options.SeedDemoData && !IsRealRobot(configuration))
             DemoSeed.SeedIfEmptyAsync(store).GetAwaiter().GetResult();
     }
 

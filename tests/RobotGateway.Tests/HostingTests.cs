@@ -239,6 +239,38 @@ public sealed partial class HostingTests : IAsyncLifetime
     }
 
     [Fact]
+    public void RealRobot_UsesItsOwnDatabase_WithoutDemoData()
+    {
+        var mock = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Planning:DatabasePath"] = "data/planning.db",
+        }).Build();
+        var flexiv = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Planning:DatabasePath"] = "data/planning.db",
+            ["Robot:Backend"] = "Flexiv",
+        }).Build();
+
+        Assert.Equal(Path.Combine("data", "planning.db"), Path.Combine(Path.GetDirectoryName(GatewayComposition.DatabasePath(mock))!, Path.GetFileName(GatewayComposition.DatabasePath(mock))));
+        Assert.Equal(Path.Combine("data", "planning-flexiv.db"), GatewayComposition.DatabasePath(flexiv));
+    }
+
+    [Fact]
+    public async Task RealRobot_NeverGetsDemoJobs()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"hosting-test-{Guid.NewGuid():N}.db");
+        await using var app = BuildOperator(new()
+        {
+            ["Robot:Backend"] = "Flexiv",
+            ["Robot:Flexiv:SerialNumber"] = "Rizon4-062609",
+            ["Planning:DatabasePath"] = db,
+            ["Planning:SeedDemoData"] = "true",
+        });
+
+        Assert.Empty(await app.Services.GetRequiredService<IPlanningReader>().ListJobsAsync());
+    }
+
+    [Fact]
     public void UnknownBackend_IsRefused() =>
         Assert.Throws<InvalidOperationException>(() => BuildOperator(new() { ["Robot:Backend"] = "Bogus" }));
 
