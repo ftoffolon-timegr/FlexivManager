@@ -1,0 +1,4 @@
+flexiv_rdk        : v1.8 (a2dcedc637dc413b0e51c1b6442a614874d60f33)
+flexiv_rdk_csharp : 37a09c2700d668365324dcde85fac23e6ba08ddf (+ local changes, see third_party/flexiv_rdk_csharp/LOCAL_CHANGES.md)
+built             : 2026-10-29 16:59 on THINKTOF2K26, MSVC 14.51 (VS 18), CMake 4.3, deps per flexiv_rdk v1.8 thirdparty scripts
+dll sha256        : C70EF790EB508024DD61E29B664CEF013F0B9F3A966E8AEAA966F6E31FFADB9A

@@ -94,6 +94,22 @@ public class FlexivBackendTests
     }
 
     [Fact]
+    public void NativeDll_ForRdk18_LoadsAndExportsTheUsedFunctions()
+    {
+        var dll = Path.Combine(NativeRdkLoader.FolderFor("1.8"), NativeRdkLoader.DllName);
+        if (!File.Exists(dll))
+            return; // not built on this machine (third_party/build-native.ps1)
+
+        NativeRdkLoader.EnsureLoaded("1.8"); // load only: no robot object, no network
+
+        var handle = System.Runtime.InteropServices.NativeLibrary.Load(dll);
+        foreach (var export in new[] { "CreateFlexivRobot", "IsConnected", "IsOperational", "IsBusy", "GetStates",
+                     "GetPlanList", "GetPlanInfo", "ExecutePlanByName", "PausePlan", "StopPlan", "Stop", "Enable",
+                     "ClearFault", "SwitchMode", "SetVelocityScale", "GetEventLog" })
+            Assert.True(System.Runtime.InteropServices.NativeLibrary.TryGetExport(handle, export, out _), export);
+    }
+
+    [Fact]
     public void Connect_WithoutNativeDll_FailsWithBuildHint()
     {
         using var backend = new FlexivBackend(new FlexivBackendOptions { SerialNumber = "Rizon4-062609", RdkVersion = "0.0" });

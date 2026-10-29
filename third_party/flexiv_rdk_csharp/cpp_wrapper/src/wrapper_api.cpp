@@ -518,7 +518,12 @@ EXPORT_API void StreamJointTorque(Robot* robot, const double* pos, int posLen,
 	int enableGravityComp, int enableSoftLimits, double frictionCompScale, FlexivError* error) {
 	try {
 		std::vector<double> positions(pos, pos + posLen);
+#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: RDK 1.8 has no friction compensation argument (ignored)
+		(void)frictionCompScale;
+		robot->StreamJointTorque(positions, enableGravityComp, enableSoftLimits);
+#else
 		robot->StreamJointTorque(positions, enableGravityComp, enableSoftLimits, frictionCompScale);
+#endif
 		error->error_code = 0;
 	}
 	catch (std::exception& e) {
@@ -1343,7 +1348,11 @@ EXPORT_API void DownloadProject(FileIO* fileIO, const char* projectName, const c
 
 EXPORT_API void DownloadCollisionMesh(FileIO* fileIO, const char* saveDir, FlexivError* error) {
 	try {
+#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: not available before RDK 1.9
+		throw std::runtime_error("DownloadCollisionMesh requires flexiv_rdk 1.9 or later");
+#else
 		fileIO->DownloadCollisionMesh(saveDir);
+#endif
 		error->error_code = 0;
 	}
 	catch (const std::exception& e) {
@@ -1416,9 +1425,13 @@ EXPORT_API int DeviceEnabled(Device* device, const char* name, FlexivError* erro
 
 EXPORT_API int DeviceConnected(Device* device, const char* name, FlexivError* error) {
 	try {
+#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: Device::connected() does not exist before RDK 1.9
+		throw std::runtime_error("DeviceConnected requires flexiv_rdk 1.9 or later");
+#else
 		int flag = device->connected(name);
 		error->error_code = 0;
 		return flag;
+#endif
 	}
 	catch (const std::exception& e) {
 		error->error_code = 1;
@@ -1585,8 +1598,9 @@ EXPORT_API void SetJointPositionLimits(Safety* safetyPtr, double* minPositions,
 EXPORT_API void SetJointVelocityNormalLimits(Safety* safetyPtr, double* maxVel,
 	int len, FlexivError* error) {
 	try {
-		std::vector<double> maxVel(maxVel, maxVel + len);
-		safetyPtr->SetJointVelocityNormalLimits(maxVel);
+		// LOCAL CHANGE: the local vector shadowed the parameter (vector built from itself, undefined behavior).
+		std::vector<double> maxVelVec(maxVel, maxVel + len);
+		safetyPtr->SetJointVelocityNormalLimits(maxVelVec);
 		error->error_code = 0;
 	}
 	catch (const std::exception& e) {
@@ -1598,8 +1612,9 @@ EXPORT_API void SetJointVelocityNormalLimits(Safety* safetyPtr, double* maxVel,
 EXPORT_API void SetJointVelocityReducedLimits(Safety* safetyPtr, double* maxVel,
 	int len, FlexivError* error) {
 	try {
-		std::vector<double> maxVel(maxVel, maxVel + len);
-		safetyPtr->SetJointVelocityReducedLimits(maxVel);
+		// LOCAL CHANGE: the local vector shadowed the parameter (vector built from itself, undefined behavior).
+		std::vector<double> maxVelVec(maxVel, maxVel + len);
+		safetyPtr->SetJointVelocityReducedLimits(maxVelVec);
 		error->error_code = 0;
 	}
 	catch (const std::exception& e) {
@@ -1611,7 +1626,11 @@ EXPORT_API void SetJointVelocityReducedLimits(Safety* safetyPtr, double* maxVel,
 EXPORT_API void SetJointOutputTorqueRegulator(Safety* safetyPtr, double limitingFactor,
 	int errorThreshold, FlexivError* error) {
 	try {
+#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: not available before RDK 1.9
+		throw std::runtime_error("SetJointOutputTorqueRegulator requires flexiv_rdk 1.9 or later");
+#else
 		safetyPtr->SetJointOutputTorqueRegulator(limitingFactor, errorThreshold);
+#endif
 		error->error_code = 0;
 	}
 	catch (const std::exception& e) {
