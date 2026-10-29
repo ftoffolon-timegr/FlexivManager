@@ -22,6 +22,8 @@ public sealed class RobotWorker(
     TimeProvider time,
     ILogger<RobotWorker> logger) : BackgroundService
 {
+    private const int WorkerStackSize = 16 * 1024 * 1024;
+
     private readonly RobotWorkerOptions _options = options.Value;
 
     // State below is touched only by the worker thread.
@@ -45,6 +47,8 @@ public sealed class RobotWorker(
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Large stack: the native Flexiv RDK overflows the default ~1.5 MB while constructing the robot object
+        // (seen with RDK 1.8 on 2026-10-29), and it then runs on this thread for the whole session.
         var thread = new Thread(() =>
         {
             try
@@ -57,7 +61,7 @@ public sealed class RobotWorker(
                 logger.LogCritical(ex, "Robot worker crashed.");
                 done.TrySetException(ex);
             }
-        })
+        }, maxStackSize: WorkerStackSize)
         {
             Name = "RobotWorker",
             IsBackground = true,
