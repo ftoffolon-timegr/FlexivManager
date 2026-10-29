@@ -10,6 +10,18 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
+    },
+    "http (robot)": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "launchUrl": "robot",
+      "applicationUrl": "http://127.0.0.1:8081",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Robot__Backend": "Flexiv",
+        "Robot__Flexiv__NetworkInterfaces__0": "192.168.2.150"
+      }
     }
   }
 }
