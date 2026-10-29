@@ -57,6 +57,43 @@ function Run([string]$exe, [string[]]$arguments) {
     if ($LASTEXITCODE -ne 0) { throw "$exe failed with exit code $LASTEXITCODE" }
 }
 
+# Runs a git check whose failure is an answer, not an error (PowerShell 5 would turn its stderr into a
+# terminating error under ErrorActionPreference=Stop). Returns true on exit code 0.
+function Test-Git {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & git @args *> $null; return $LASTEXITCODE -eq 0 }
+    finally { $ErrorActionPreference = $previous }
+}
+
+# Provides <cloned>/<name> at an exact commit (and with an optional patch) before the RDK scripts run.
+# The checkout is accepted only if HEAD is the expected commit, so the source URL does not need to be trusted.
+function Use-PinnedDependency([string]$cloned, [string]$name, [string]$url, [string]$tag, [string]$commit, [string]$patch = "") {
+    $dir = Join-Path $cloned $name
+    $head = if ((Test-Path $dir) -and (Test-Git -C $dir rev-parse --verify --quiet HEAD)) { (git -C $dir rev-parse HEAD).Trim() } else { $null }
+    if ($head -ne $commit) {
+        if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+        Step "Cloning $name $tag from $url"
+        New-Item -ItemType Directory -Force $cloned | Out-Null
+        Run git @("clone", "--branch", $tag, "--depth", "1", $url, $dir)
+        $head = (git -C $dir rev-parse HEAD).Trim()
+        if ($head -ne $commit) {
+            Remove-Item $dir -Recurse -Force
+            throw "$name from $url is at $head, expected the official $tag commit $commit."
+        }
+    }
+    if ($patch) {
+        if (-not (Test-Git -C $dir apply --reverse --check $patch)) {
+            Step "Patching $name with $(Split-Path $patch -Leaf)"
+            Run git @("-C", $dir, "apply", $patch)
+            # A configure that failed before the patch leaves a stale cache.
+            $build = Join-Path $dir "build"
+            if (Test-Path $build) { Remove-Item $build -Recurse -Force }
+        }
+    }
+    Write-Host "$name $tag verified ($commit)$(if ($patch) { ', patched' })"
+}
+
 if (-not (Test-Path $rdkSrc)) {
     Step "Cloning flexiv_rdk $RdkTag"
     Run git @("clone", "--branch", $RdkTag, "--depth", "1", "https://github.com/flexivrobotics/flexiv_rdk.git", $rdkSrc)
@@ -70,28 +107,19 @@ if (-not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
         # dependency scripts fail on the next run: remove it so it is cloned again.
         if (Test-Path $cloned) {
             foreach ($dir in Get-ChildItem $cloned -Directory) {
-                git -C $dir.FullName rev-parse --verify --quiet HEAD *> $null
-                if ($LASTEXITCODE -ne 0) {
+                if (-not (Test-Git -C $dir.FullName rev-parse --verify --quiet HEAD)) {
                     Write-Host "Removing incomplete clone $($dir.FullName)" -ForegroundColor Yellow
                     Remove-Item $dir.FullName -Recurse -Force
                 }
             }
         }
-        # install_eigen.sh clones from gitlab.com only if cloned/eigen does not exist: provide it from the mirror.
-        $eigenDir = Join-Path $cloned "eigen"
-        $eigenHead = if (Test-Path $eigenDir) { git -C $eigenDir rev-parse --verify --quiet "refs/tags/$EigenTag^{commit}" 2>$null } else { $null }
-        if ($eigenHead -ne $EigenCommit) {
-            if (Test-Path $eigenDir) { Remove-Item $eigenDir -Recurse -Force }
-            Step "Cloning Eigen $EigenTag from $EigenUrl"
-            New-Item -ItemType Directory -Force $cloned | Out-Null
-            Run git @("clone", "--branch", $EigenTag, "--depth", "1", $EigenUrl, $eigenDir)
-            $eigenHead = (git -C $eigenDir rev-parse HEAD).Trim()
-            if ($eigenHead -ne $EigenCommit) {
-                Remove-Item $eigenDir -Recurse -Force
-                throw "Eigen from $EigenUrl is at $eigenHead, expected the official $EigenTag commit $EigenCommit. Use another -EigenUrl."
-            }
-        }
-        Write-Host "Eigen $EigenTag verified ($EigenCommit)"
+        # The install_*.sh scripts clone a dependency only if its folder is missing, so these are provided here.
+        # Eigen: from a mirror (gitlab.com refuses clones under load); install_eigen.sh resets it, no patch possible.
+        Use-PinnedDependency $cloned "eigen" $EigenUrl $EigenTag $EigenCommit
+        # tinyxml2: forces policy CMP0063 to OLD, which CMake 4 refuses. install_tinyxml2.sh only checks out the
+        # same tag (no reset), so the patched working tree is kept.
+        Use-PinnedDependency $cloned "tinyxml2" "https://github.com/leethomason/tinyxml2.git" "8.0.0" `
+            "bf15233ad88390461f6ab0dbcf046cce643c5fcb" (Join-Path $PSScriptRoot "patches\tinyxml2-8.0.0-cmake4.patch")
 
         Push-Location (Join-Path $rdkSrc "thirdparty")
         try {
