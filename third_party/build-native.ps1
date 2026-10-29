@@ -40,6 +40,9 @@ if (-not (Test-Path "$cmakeBin\cmake.exe")) { throw "CMake from Visual Studio no
 if (-not (Test-Path $bash)) { throw "Git for Windows bash not found: $bash" }
 
 $env:PATH = "$cmakeBin;$env:PATH"
+# CMake 4 (shipped with VS 2026) rejects projects declaring cmake_minimum_required < 3.5, as some pinned RDK
+# dependencies do. This environment variable applies to every cmake call, including those of the RDK scripts.
+if (-not $env:CMAKE_POLICY_VERSION_MINIMUM) { $env:CMAKE_POLICY_VERSION_MINIMUM = "3.5" }
 # Long paths for the clones made by the dependency scripts, without touching the user's git config.
 $env:GIT_CONFIG_COUNT = "1"; $env:GIT_CONFIG_KEY_0 = "core.longpaths"; $env:GIT_CONFIG_VALUE_0 = "true"
 
