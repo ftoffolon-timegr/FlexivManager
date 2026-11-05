@@ -3,21 +3,21 @@
 @inject SnapshotStore Store
 @inject IPlanningReader Planning
 
-<PageTitle>Robot plans</PageTitle>
+<PageTitle>Plan del robot</PageTitle>
 
-<h1>Robot plans</h1>
+<h1>Plan del robot</h1>
 <p class="text-muted small">
-    Plans stored on the robot (Flexiv Elements), as read by the gateway. The list is refreshed periodically while the robot is idle.
+    Plan salvati sul robot (Flexiv Elements), come letti dal gateway. L'elenco si aggiorna periodicamente quando il robot è fermo.
 </p>
 
 @if (_plans.Length == 0)
 {
-    <div class="alert alert-secondary">No plan list yet: the robot has not been connected.</div>
+    <div class="alert alert-secondary">Elenco plan non ancora disponibile: il robot non è stato collegato.</div>
 }
 else
 {
     <table class="table table-sm align-middle">
-        <thead><tr><th>Plan</th><th>Used by codes</th></tr></thead>
+        <thead><tr><th>Plan</th><th>Usato dai codici</th></tr></thead>
         <tbody>
             @foreach (var plan in _plans)
             {
@@ -47,7 +47,7 @@ else
 {
     <div class="alert alert-warning">
         <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-        Codes pointing to plans not on the robot:
+        Codici che puntano a plan non presenti sul robot:
         @foreach (var job in orphans)
         {
             <span class="badge text-bg-warning me-1">@job.ProductCode → @job.PlanName</span>

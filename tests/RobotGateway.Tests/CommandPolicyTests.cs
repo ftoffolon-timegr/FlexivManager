@@ -4,8 +4,8 @@ namespace RobotGateway.Tests;
 
 public class CommandPolicyTests
 {
-    private static StartCycleCommand Start(string plan, int velocity) =>
-        new(new CycleRequest(new Job { ProductCode = "C", PlanName = plan, VelocityScale = velocity }, null, null));
+    private static StartCycleCommand Start(string plan) =>
+        new(new CycleRequest(new Job { ProductCode = "C", PlanName = plan }, null, null));
 
     [Theory]
     [InlineData(RobotServiceState.Disconnected)]
@@ -23,24 +23,15 @@ public class CommandPolicyTests
     [InlineData(RobotServiceState.Fault)]
     [InlineData(RobotServiceState.EStop)]
     public void StartCycle_OnlyWhenOperational(RobotServiceState state) =>
-        Assert.NotNull(CommandPolicy.Check(state, Start("P", 50)));
+        Assert.NotNull(CommandPolicy.Check(state, Start("P")));
 
     [Fact]
     public void StartCycle_AllowedWhenOperational() =>
-        Assert.Null(CommandPolicy.Check(RobotServiceState.Operational, Start("P", 50)));
+        Assert.Null(CommandPolicy.Check(RobotServiceState.Operational, Start("P")));
 
     [Fact]
     public void StartCycle_RequiresName() =>
-        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, Start(" ", 50)));
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(101)]
-    public void VelocityScale_OutOfRange_IsRejected(int percent)
-    {
-        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, new SetVelocityScaleCommand(percent)));
-        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, Start("P", percent)));
-    }
+        Assert.NotNull(CommandPolicy.Check(RobotServiceState.Operational, Start(" ")));
 
     [Fact]
     public void PauseResumeStopPlan_FollowExecutionState()
@@ -67,7 +58,7 @@ public class CommandPolicyTests
     [Fact]
     public void MotionCommands_AreFlagged()
     {
-        Assert.True(Start("P", 50).IsMotion);
+        Assert.True(Start("P").IsMotion);
         Assert.True(new ResumePlanCommand().IsMotion);
         Assert.False(new StopCommand().IsMotion);
         Assert.False(new EnableCommand().IsMotion);

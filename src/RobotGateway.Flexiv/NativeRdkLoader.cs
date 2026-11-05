@@ -27,16 +27,16 @@ internal static class NativeRdkLoader
         {
             if (_loadedVersion == rdkVersion) return;
             if (_loadedVersion is not null)
-                throw new RobotBackendException($"RDK {_loadedVersion} is already loaded; restart the service to switch to {rdkVersion}.");
+                throw new RobotBackendException($"RDK {_loadedVersion} è già caricato: riavvia il servizio per passare a {rdkVersion}.");
 
             var path = Path.Combine(FolderFor(rdkVersion), DllName);
             if (!File.Exists(path))
-                throw new RobotBackendException($"Native RDK wrapper not found: {path}. Build it with third_party/build-native.ps1 -RdkTag v{rdkVersion}.");
+                throw new RobotBackendException($"Wrapper nativo RDK non trovato: {path}. Compilalo con third_party/build-native.ps1 -RdkTag v{rdkVersion}.");
             if (!Environment.Is64BitProcess)
-                throw new RobotBackendException("The Flexiv RDK wrapper requires a 64-bit (x64) process.");
+                throw new RobotBackendException("Il wrapper Flexiv RDK richiede un processo a 64 bit (x64).");
 
             try { _handle = NativeLibrary.Load(path); }
-            catch (Exception ex) { throw new RobotBackendException($"Cannot load {path}: {ex.Message}", ex); }
+            catch (Exception ex) { throw new RobotBackendException($"Impossibile caricare {path}: {ex.Message}", ex); }
 
             var wrapperAssembly = typeof(FlexivRdk.Robot).Assembly;
             NativeLibrary.SetDllImportResolver(wrapperAssembly, Resolve);

@@ -17,7 +17,7 @@ namespace FlexivManager.Hosting;
 /// <list type="bullet">
 /// <item>Operator host (local, loopback only): owns the robot backend, the worker, the command service and
 /// the cycle recorder. Executes jobs; cannot edit planning data.</item>
-/// <item>Monitoring host (remote, intranet): read-only robot data plus planning (jobs, work list) behind the
+/// <item>Monitoring host (remote, intranet): read-only robot data plus planning (jobs, work plan) behind the
 /// editor login. It has no backend and no command service, so nothing served from it can move the robot.</item>
 /// </list>
 /// </summary>
@@ -79,9 +79,17 @@ public static class GatewayComposition
         builder.Services.AddSingleton(operatorServices.GetRequiredService<IOptions<RobotWorkerOptions>>());
         builder.Services.AddSingleton<IPlanningStore>(store);
         builder.Services.AddSingleton<IPlanningReader>(store);
+        builder.Services.AddSingleton<IErpStore>(store);
+        builder.Services.AddSingleton(operatorServices.GetRequiredService<ArticleImporter>());
+        builder.Services.AddSingleton(operatorServices.GetRequiredService<ProductionExportService>());
 
         // Planning edits behind the single-account login.
-        builder.Services.Configure<PlanningOptions>(o => o.RequireAuthenticatedUser = endpoint.RequireLoginForEdit);
+        var onlyImportedCodes = operatorServices.GetRequiredService<IOptions<ErpOptions>>().Value.OnlyImportedCodes;
+        builder.Services.Configure<PlanningOptions>(o =>
+        {
+            o.RequireAuthenticatedUser = endpoint.RequireLoginForEdit;
+            o.OnlyImportedCodes = onlyImportedCodes;
+        });
         builder.Services.AddSingleton<PlanningService>();
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(o =>
@@ -106,8 +114,12 @@ public static class GatewayComposition
         var app = builder.Build();
         if (endpoint.RequireLoginForEdit && endpoint.Editor.PasswordHash.Length == 0)
             app.Logger.LogWarning("No editor password configured (Hosts:Monitoring:Editor:PasswordHash): planning is read-only.");
+        if (endpoint.Api.Key.Length == 0)
+            app.Logger.LogInformation("No API key configured (Hosts:Monitoring:Api:Key): the REST write API refuses every call.");
         ConfigurePipeline(app);
         app.MapAccountEndpoints(endpoint);
+        app.MapPlanningApi(endpoint.Api);
+        app.MapErpImportApi(endpoint.Api);
         return app;
     }
 
@@ -162,6 +174,8 @@ public static class GatewayComposition
         // Local station reads planning data; edits exist only on the monitoring host.
         services.AddSingleton<IPlanningReader>(sp => sp.GetRequiredService<SqlitePlanningStore>());
 
+        AddErpInterface(services, configuration, environment);
+
         services.AddSingleton<SnapshotStore>();
         services.AddSingleton(_ => new EventLog());
         services.AddSingleton<CycleEvents>();
@@ -174,6 +188,47 @@ public static class GatewayComposition
             sp.GetRequiredService<EventLog>(),
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILogger<CycleRecorder>>()));
+    }
+
+    /// <summary>
+    /// ERP interface: article file import (polled here, on the always-running operator host; the manual scan is
+    /// exposed on the monitoring host) and the production export (read on both hosts).
+    /// </summary>
+    private static void AddErpInterface(IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
+    {
+        services.AddOptions<ErpOptions>()
+            .Bind(configuration.GetSection(ErpOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddSingleton<IErpStore>(sp => sp.GetRequiredService<SqlitePlanningStore>());
+        services.AddSingleton(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<ErpOptions>>().Value;
+            return new ArticleImporter(
+                options,
+                ResolveImportFolder(options.ImportFolder, environment.ContentRootPath),
+                sp.GetRequiredService<IErpStore>(),
+                sp.GetRequiredService<EventLog>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ILogger<ArticleImporter>>());
+        });
+        services.AddHostedService<ArticleImportService>();
+        services.AddSingleton<ProductionExportService>();
+    }
+
+    /// <summary>
+    /// Absolute import folder. A relative path (local test folder) is resolved against the content root and
+    /// created; an absolute or UNC path is the ERP's and is never created here.
+    /// </summary>
+    public static string ResolveImportFolder(string folder, string contentRoot)
+    {
+        if (string.IsNullOrWhiteSpace(folder))
+            return "";
+        if (Path.IsPathRooted(folder))
+            return folder;
+        var full = Path.GetFullPath(Path.Combine(contentRoot, folder));
+        Directory.CreateDirectory(full);
+        return full;
     }
 
     private static bool IsRealRobot(IConfiguration configuration) =>
@@ -210,10 +265,13 @@ public static class GatewayComposition
         app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
         app.UseAuthentication();
         app.UseAuthorization();
+        if (app.Services.GetRequiredService<HostRole>().CanCommand)
+            app.UseOperatorPagesOnly();
         app.UseAntiforgery();
 
         app.MapStaticAssets();
         app.MapReadOnlyApi();
+        app.MapErpReadApi();
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
     }

@@ -9,6 +9,7 @@ public sealed class PlanningDbContext(DbContextOptions<PlanningDbContext> option
     public DbSet<JobHistoryEntity> JobHistory => Set<JobHistoryEntity>();
     public DbSet<OrderEntity> Orders => Set<OrderEntity>();
     public DbSet<CycleEntity> Cycles => Set<CycleEntity>();
+    public DbSet<ArticleEntity> Articles => Set<ArticleEntity>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -32,6 +33,7 @@ public sealed class PlanningDbContext(DbContextOptions<PlanningDbContext> option
         {
             e.ToTable("Orders");
             e.HasIndex(o => new { o.Status, o.Position });
+            e.HasIndex(o => new { o.WorkDate, o.Position });
             e.HasIndex(o => o.OrderNumber);
             e.Property(o => o.OrderNumber).HasMaxLength(PlanningValidator.MaxOrderNumberLength).IsRequired();
             e.Property(o => o.ProductCode).HasMaxLength(ProductCode.MaxLength).IsRequired();
@@ -46,6 +48,16 @@ public sealed class PlanningDbContext(DbContextOptions<PlanningDbContext> option
             e.HasIndex(c => c.OrderId);
             e.Property(c => c.Outcome).HasConversion<string>().HasMaxLength(16);
         });
+
+        // Article codes received from the ERP. Keep in sync with SqlitePlanningStore.AddArticlesTable.
+        model.Entity<ArticleEntity>(e =>
+        {
+            e.ToTable("Articles");
+            e.HasIndex(a => a.Code).IsUnique();
+            e.Property(a => a.Code).HasMaxLength(ProductCode.MaxLength).IsRequired();
+            e.Property(a => a.RawCode).HasMaxLength(ProductCode.MaxLength).IsRequired();
+            e.Property(a => a.SourceFile).HasMaxLength(260).IsRequired();
+        });
     }
 }
 
@@ -54,9 +66,9 @@ public sealed class JobEntity
     public int Id { get; set; }
     public string ProductCode { get; set; } = "";
     public string PlanName { get; set; } = "";
-    public int VelocityScale { get; set; }
     public string? Description { get; set; }
     public bool Enabled { get; set; }
+    public bool IsService { get; set; }
     public int Version { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
@@ -78,6 +90,7 @@ public sealed class JobHistoryEntity
 public sealed class OrderEntity
 {
     public int Id { get; set; }
+    public DateOnly WorkDate { get; set; }
     public string OrderNumber { get; set; } = "";
     public string ProductCode { get; set; } = "";
     public int Quantity { get; set; }
@@ -99,10 +112,19 @@ public sealed class CycleEntity
     public string? OrderNumber { get; set; }
     public string ProductCode { get; set; } = "";
     public string PlanName { get; set; } = "";
-    public int VelocityScale { get; set; }
     public string Source { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }
     public double DurationSeconds { get; set; }
     public CycleOutcome Outcome { get; set; }
     public string? Message { get; set; }
+}
+
+public sealed class ArticleEntity
+{
+    public int Id { get; set; }
+    public string Code { get; set; } = "";
+    public string RawCode { get; set; } = "";
+    public DateTimeOffset FirstImportedAt { get; set; }
+    public DateTimeOffset LastImportedAt { get; set; }
+    public string SourceFile { get; set; } = "";
 }

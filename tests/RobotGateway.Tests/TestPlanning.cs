@@ -11,18 +11,20 @@ internal sealed class FakePlanning : IPlanningReader
     public List<Job> Jobs { get; } = [];
     public List<ProductionOrder> Orders { get; } = [];
 
-    public Job AddJob(string code, string plan, int velocity = 100, bool enabled = true)
+    public static DateOnly Today => WorkDay.Today(TimeProvider.System);
+
+    public Job AddJob(string code, string plan, bool enabled = true, bool service = false)
     {
-        var job = new Job { Id = Jobs.Count + 1, ProductCode = code, PlanName = plan, VelocityScale = velocity, Enabled = enabled, Version = 1 };
+        var job = new Job { Id = Jobs.Count + 1, ProductCode = code, PlanName = plan, Enabled = enabled, IsService = service, Version = 1 };
         Jobs.Add(job);
         return job;
     }
 
-    public ProductionOrder AddOrder(string number, string code, int quantity, OrderStatus status = OrderStatus.Pending, int done = 0)
+    public ProductionOrder AddOrder(string number, string code, int quantity, OrderStatus status = OrderStatus.Pending, int done = 0, DateOnly? date = null)
     {
         var order = new ProductionOrder
         {
-            Id = Orders.Count + 1, OrderNumber = number, ProductCode = code, Quantity = quantity,
+            Id = Orders.Count + 1, WorkDate = date ?? Today, OrderNumber = number, ProductCode = code, Quantity = quantity,
             CompletedCount = done, Status = status, Position = Orders.Count + 1,
         };
         Orders.Add(order);
@@ -35,11 +37,14 @@ internal sealed class FakePlanning : IPlanningReader
         Task.FromResult(Jobs.FirstOrDefault(j => j.ProductCode == ProductCode.Normalize(productCode)));
     public Task<IReadOnlyList<JobHistoryEntry>> GetJobHistoryAsync(int jobId, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<JobHistoryEntry>>([]);
     public Task<IReadOnlyList<ProductionOrder>> ListOpenOrdersAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<ProductionOrder>>(Orders.Where(o => o.IsOpen).OrderBy(o => o.Status == OrderStatus.Active ? 0 : 1).ThenBy(o => o.Position).ToList());
+        Task.FromResult<IReadOnlyList<ProductionOrder>>(Orders.Where(o => o.IsOpen).OrderBy(o => o.WorkDate).ThenBy(o => o.Position).ToList());
+    public Task<IReadOnlyList<ProductionOrder>> ListPlanAsync(DateOnly date, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ProductionOrder>>(Orders.Where(o => o.WorkDate == date).OrderBy(o => o.Position).ToList());
     public Task<IReadOnlyList<ProductionOrder>> ListClosedOrdersAsync(int max, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<ProductionOrder>>(Orders.Where(o => !o.IsOpen).ToList());
     public Task<ProductionOrder?> GetOrderAsync(int id, CancellationToken ct = default) => Task.FromResult(Orders.FirstOrDefault(o => o.Id == id));
     public Task<IReadOnlyList<CycleRecord>> ListCyclesAsync(int max, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<CycleRecord>>([]);
+    public Task<CycleRecord?> GetCycleAsync(long id, CancellationToken ct = default) => Task.FromResult<CycleRecord?>(null);
 }
 
 /// <summary>Real SQLite store on a temporary file.</summary>

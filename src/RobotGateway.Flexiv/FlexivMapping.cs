@@ -24,7 +24,7 @@ internal static class FlexivMapping
         RobotMode.NrtPrimitiveExecution => Rdk.RobotMode.NRT_PRIMITIVE_EXECUTION,
         RobotMode.NrtJointPosition => Rdk.RobotMode.NRT_JOINT_POSITION,
         RobotMode.NrtCartesianMotionForce => Rdk.RobotMode.NRT_CARTESIAN_MOTION_FORCE,
-        _ => throw new InvalidOperationException($"Mode {mode} cannot be commanded."),
+        _ => throw new InvalidOperationException($"La modalità {mode} non si può comandare."),
     };
 
     public static OperationalStatus ToCore(Rdk.OperationalStatus status) => status switch

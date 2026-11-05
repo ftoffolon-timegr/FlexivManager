@@ -55,7 +55,7 @@ public sealed class MockBackend : IRobotBackend
     // ---- Simulation hooks (tests and demo) ---------------------------------------------------
 
     /// <summary>Raises a robot fault, as a collision would.</summary>
-    public void InjectFault(string reason = "Simulated fault")
+    public void InjectFault(string reason = "Anomalia simulata")
     {
         lock (_sync)
         {
@@ -78,12 +78,12 @@ public sealed class MockBackend : IRobotBackend
                 _operational = false;
                 _enableDoneAt = null;
                 _status = OperationalStatus.EStopNotReleased;
-                AddEvent(EventLevel.Error, "Emergency stop pressed.");
+                AddEvent(EventLevel.Error, "Arresto di emergenza premuto.");
             }
             else
             {
                 _status = _fault ? OperationalStatus.MinorFault : OperationalStatus.NotEnabled;
-                AddEvent(EventLevel.Info, "Emergency stop released.");
+                AddEvent(EventLevel.Info, "Arresto di emergenza rilasciato.");
             }
         }
     }
@@ -109,7 +109,7 @@ public sealed class MockBackend : IRobotBackend
     {
         lock (_sync)
         {
-            if (_linkLost) throw new RobotBackendException("Mock robot not reachable.");
+            if (_linkLost) throw new RobotBackendException("Robot simulato non raggiungibile.");
             if (_connected) return;
             _connected = true;
             _operational = false;
@@ -119,7 +119,7 @@ public sealed class MockBackend : IRobotBackend
                 : _fault ? OperationalStatus.MinorFault
                 : OperationalStatus.NotEnabled;
             _lastUpdate = _time.GetTimestamp();
-            AddEvent(EventLevel.Info, "RDK client connected.");
+            AddEvent(EventLevel.Info, "Client RDK connesso.");
         }
     }
 
@@ -167,12 +167,12 @@ public sealed class MockBackend : IRobotBackend
 
     public void Enable() => Act(() =>
     {
-        if (_estopPressed) throw new InvalidOperationException("Emergency stop not released.");
-        if (_fault) throw new InvalidOperationException("Clear the fault before enabling.");
+        if (_estopPressed) throw new InvalidOperationException("Arresto di emergenza non rilasciato.");
+        if (_fault) throw new InvalidOperationException("Resetta l'anomalia prima di abilitare.");
         if (_operational || _enableDoneAt is not null) return;
         _status = OperationalStatus.ReleasingBrake;
         _enableDoneAt = _time.GetTimestamp() + (long)(_options.EnableDelay.TotalSeconds * _time.TimestampFrequency);
-        AddEvent(EventLevel.Info, "Enabling: releasing brakes.");
+        AddEvent(EventLevel.Info, "Abilitazione: rilascio dei freni.");
     });
 
     public void ClearFault() => Act(() =>
@@ -181,13 +181,13 @@ public sealed class MockBackend : IRobotBackend
         _fault = false;
         _operational = false;
         _status = _estopPressed ? OperationalStatus.EStopNotReleased : OperationalStatus.NotEnabled;
-        AddEvent(EventLevel.Info, "Fault cleared.");
+        AddEvent(EventLevel.Info, "Anomalia resettata.");
     });
 
     public void SwitchMode(RobotMode mode) => Act(() =>
     {
-        if (!_operational) throw new InvalidOperationException("Robot not operational.");
-        if (_runningPlan is not null) throw new InvalidOperationException("Cannot switch mode while busy.");
+        if (!_operational) throw new InvalidOperationException("Robot non operativo.");
+        if (_runningPlan is not null) throw new InvalidOperationException("Impossibile cambiare modalità durante l'esecuzione.");
         _mode = mode;
     });
 
@@ -200,30 +200,30 @@ public sealed class MockBackend : IRobotBackend
 
     public void ExecutePlan(string name, bool continueExec = false) => Act(() =>
     {
-        if (!_operational) throw new InvalidOperationException("Robot not operational.");
-        if (_mode != RobotMode.NrtPlanExecution) throw new InvalidOperationException("Robot is not in NRT_PLAN_EXECUTION mode.");
-        if (_runningPlan is not null) throw new InvalidOperationException("A plan is already running.");
+        if (!_operational) throw new InvalidOperationException("Robot non operativo.");
+        if (_mode != RobotMode.NrtPlanExecution) throw new InvalidOperationException("Il robot non è in modalità NRT_PLAN_EXECUTION.");
+        if (_runningPlan is not null) throw new InvalidOperationException("Un plan è già in esecuzione.");
         var plan = _options.Plans.FirstOrDefault(p => p.Name == name)
-            ?? throw new InvalidOperationException($"Plan '{name}' does not exist.");
+            ?? throw new InvalidOperationException($"Il plan '{name}' non esiste.");
         _runningPlan = plan;
         _paused = false;
         _planElapsed = 0;
         _planStartQ = (double[])_q.Clone();
-        AddEvent(EventLevel.Info, $"Plan {name} started.");
+        AddEvent(EventLevel.Info, $"Plan {name} avviato.");
     });
 
     public void PausePlan(bool pause) => Act(() =>
     {
         if (_mode != RobotMode.NrtPlanExecution || _runningPlan is null)
-            throw new InvalidOperationException("No plan running.");
+            throw new InvalidOperationException("Nessun plan in esecuzione.");
         _paused = pause;
-        AddEvent(EventLevel.Info, pause ? "Plan paused." : "Plan resumed.");
+        AddEvent(EventLevel.Info, pause ? "Plan in pausa." : "Plan ripreso.");
     });
 
     public void StopPlan() => Act(() =>
     {
         if (_runningPlan is not null)
-            AddEvent(EventLevel.Info, $"Plan {_runningPlan.Name} stopped.");
+            AddEvent(EventLevel.Info, $"Plan {_runningPlan.Name} fermato.");
         AbortMotion();
     });
 
@@ -259,8 +259,8 @@ public sealed class MockBackend : IRobotBackend
 
     private void EnsureConnected()
     {
-        if (_linkLost) throw new RobotBackendException("Mock link lost.");
-        if (!_connected) throw new RobotBackendException("Not connected.");
+        if (_linkLost) throw new RobotBackendException("Collegamento simulato perso.");
+        if (!_connected) throw new RobotBackendException("Non connesso.");
     }
 
     /// <summary>Advances the simulation to the current time.</summary>
@@ -276,7 +276,7 @@ public sealed class MockBackend : IRobotBackend
             _enableDoneAt = null;
             _operational = true;
             _status = OperationalStatus.Ready;
-            AddEvent(EventLevel.Info, "Robot enabled and operational.");
+            AddEvent(EventLevel.Info, "Robot abilitato e operativo.");
         }
 
         var previousQ = (double[])_q.Clone();
@@ -285,13 +285,13 @@ public sealed class MockBackend : IRobotBackend
             _planElapsed += dt * _velocityScale / 100.0;
             if (plan.FaultAfter is { } faultAfter && _planElapsed >= faultAfter.TotalSeconds)
             {
-                RaiseFault($"Collision detected during {plan.Name}.");
+                RaiseFault($"Collisione rilevata durante {plan.Name}.");
             }
             else if (_planElapsed >= plan.Duration.TotalSeconds)
             {
                 SetTrajectory(plan, plan.Duration.TotalSeconds);
                 _runningPlan = null;
-                AddEvent(EventLevel.Info, $"Plan {plan.Name} finished.");
+                AddEvent(EventLevel.Info, $"Plan {plan.Name} terminato.");
             }
             else
             {

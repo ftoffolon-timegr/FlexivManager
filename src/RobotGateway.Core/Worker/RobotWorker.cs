@@ -23,6 +23,7 @@ public sealed class RobotWorker(
     ILogger<RobotWorker> logger) : BackgroundService
 {
     private const int WorkerStackSize = 16 * 1024 * 1024;
+    private const int PlanVelocityScale = 100;
 
     private readonly RobotWorkerOptions _options = options.Value;
 
@@ -79,7 +80,7 @@ public sealed class RobotWorker(
         var rateWindowStart = nextDeadline;
         var rateWindowCycles = 0;
 
-        AddEvent(EventLevel.Info, $"Worker started: backend {backend.Name}, {_options.PollRateHz:0} Hz. No motion is started automatically.");
+        AddEvent(EventLevel.Info, $"Servizio robot avviato: backend {backend.Name}, {_options.PollRateHz:0} Hz. Nessun movimento parte in automatico.");
 
         while (!ct.IsCancellationRequested)
         {
@@ -137,26 +138,26 @@ public sealed class RobotWorker(
         var result = command is StopCommand ? ExecuteStop(pending.Source) : Execute(command, pending.Source);
 
         var level = result.IsSuccess ? EventLevel.Info : EventLevel.Warning;
-        AddEvent(level, $"Command {command.Name} from {pending.Source}: {result.Outcome}{(result.Message is null ? "" : " - " + result.Message)}");
+        AddEvent(level, $"Comando {command.Label} da {pending.Source}: {Labels.Of(result.Outcome)}{(result.Message is null ? "" : " - " + result.Message)}");
         pending.Complete(result);
     }
 
     private CommandResult ExecuteStop(string source)
     {
-        var flushed = commands.FlushNormal("Superseded by STOP.");
+        var flushed = commands.FlushNormal("Sostituito dallo STOP.");
         _pauseLatched = false;
-        FinishCycle(CycleOutcome.Stopped, $"STOP from {source}");
+        FinishCycle(CycleOutcome.Stopped, $"STOP da {source}");
         try
         {
             if (!backend.IsConnected)
-                return CommandResult.Ok("Not connected: nothing to stop.");
+                return CommandResult.Ok("Non connesso: niente da fermare.");
             backend.Stop();
-            return CommandResult.Ok(flushed > 0 ? $"{flushed} queued command(s) cancelled." : null);
+            return CommandResult.Ok(flushed > 0 ? $"{flushed} comandi in coda annullati." : null);
         }
         catch (Exception ex)
         {
             if (ex is RobotBackendException) HandleLinkLoss(ex.Message);
-            return CommandResult.Failed($"STOP failed: {ex.Message}");
+            return CommandResult.Failed($"STOP fallito: {ex.Message}");
         }
     }
 
@@ -166,7 +167,7 @@ public sealed class RobotWorker(
         if (rejection is not null)
             return CommandResult.Rejected(rejection);
         if (command is StartCycleCommand && _cycle is not null)
-            return CommandResult.Rejected("A cycle is already running.");
+            return CommandResult.Rejected("Un ciclo è già in esecuzione.");
 
         try
         {
@@ -191,9 +192,6 @@ public sealed class RobotWorker(
                 case SwitchModeCommand c:
                     backend.SwitchMode(c.Mode);
                     break;
-                case SetVelocityScaleCommand c:
-                    backend.SetVelocityScale(c.Percent);
-                    break;
                 case StartCycleCommand c:
                     return StartCycle(c.Request, source);
                 case PausePlanCommand:
@@ -207,10 +205,10 @@ public sealed class RobotWorker(
                 case StopPlanCommand:
                     backend.StopPlan();
                     _pauseLatched = false;
-                    FinishCycle(CycleOutcome.Stopped, $"Stopped by {source}");
+                    FinishCycle(CycleOutcome.Stopped, $"Fermato da {source}");
                     break;
                 default:
-                    return CommandResult.Rejected($"Unsupported command {command.Name}.");
+                    return CommandResult.Rejected($"Comando non supportato: {command.Label}.");
             }
             return CommandResult.Ok();
         }
@@ -232,21 +230,24 @@ public sealed class RobotWorker(
         {
             _plans = [.. backend.GetPlanList()];
             if (!_plans.Contains(job.PlanName))
-                return CommandResult.Rejected($"Plan '{job.PlanName}' not found on the robot.");
+                return CommandResult.Rejected($"Il plan '{job.PlanName}' non è presente sul robot.");
         }
 
-        backend.SetVelocityScale(job.VelocityScale);
         // Plan execution requires NRT_PLAN_EXECUTION mode; switching mode does not move the robot.
+        // It must come first: the RDK refuses SetVelocityScale outside the NRT plan/primitive modes.
         if (backend.Mode != RobotMode.NrtPlanExecution)
             backend.SwitchMode(RobotMode.NrtPlanExecution);
+        // The plan must run exactly as programmed in Elements. The robot velocity override is global and
+        // persistent (Elements, pendant), so it is reset to 100 % before every plan instead of inheriting it.
+        backend.SetVelocityScale(PlanVelocityScale);
         backend.ExecutePlan(job.PlanName, continueExec: false);
 
         _pauseLatched = false;
         _cycleSeenRunning = false;
-        _cycle = new ActiveCycle(job.ProductCode, job.PlanName, job.VelocityScale, request.OrderId, request.OrderNumber, source, time.GetUtcNow());
+        _cycle = new ActiveCycle(job.ProductCode, job.PlanName, request.OrderId, request.OrderNumber, source, time.GetUtcNow());
         cycleEvents.Publish(new CycleStarted(_cycle));
-        AddEvent(EventLevel.Info, $"Cycle started: plan {job.PlanName} @ {job.VelocityScale} %, code '{job.ProductCode}'"
-            + (request.OrderNumber is null ? " (one-off)." : $", order {request.OrderNumber}."));
+        AddEvent(EventLevel.Info, $"Ciclo avviato: plan {job.PlanName}, codice '{job.ProductCode}'"
+            + (request.OrderId is null ? " (servizio)." : request.OrderNumber is { Length: > 0 } number ? $", ordine {number}." : ", ordine di oggi."));
         return CommandResult.Ok();
     }
 
@@ -267,10 +268,10 @@ public sealed class RobotWorker(
             case RobotServiceState.Operational:
                 // The robot may report busy a little after ExecutePlan: wait, but not forever.
                 if (time.GetUtcNow() - _cycle.StartedAt > _options.PlanStartTimeout)
-                    FinishCycle(CycleOutcome.Failed, "Plan did not start.");
+                    FinishCycle(CycleOutcome.Failed, "Il plan non è partito.");
                 break;
             default:
-                FinishCycle(CycleOutcome.Failed, $"{_state} during the cycle.");
+                FinishCycle(CycleOutcome.Failed, $"{Labels.Of(_state)} durante il ciclo.");
                 break;
         }
     }
@@ -279,7 +280,7 @@ public sealed class RobotWorker(
     {
         if (_cycle is not { } cycle) return;
         var now = time.GetUtcNow();
-        _lastCycle = new CycleRecord(cycle.ProductCode, cycle.PlanName, cycle.VelocityScale, cycle.OrderId, cycle.OrderNumber,
+        _lastCycle = new CycleRecord(cycle.ProductCode, cycle.PlanName, cycle.OrderId, cycle.OrderNumber,
             cycle.Source, cycle.StartedAt, now - cycle.StartedAt, outcome, message);
         _cycle = null;
         if (outcome == CycleOutcome.Completed)
@@ -292,7 +293,7 @@ public sealed class RobotWorker(
             CycleOutcome.Stopped => EventLevel.Warning,
             _ => EventLevel.Error,
         };
-        AddEvent(level, $"Cycle {outcome}: plan {cycle.PlanName}, {_lastCycle.Duration.TotalSeconds:0.0} s"
+        AddEvent(level, $"Ciclo {Labels.Of(outcome)}: plan {cycle.PlanName}, {_lastCycle.Duration.TotalSeconds:0.0} s"
             + (message is null ? "." : $" - {message}"));
     }
 
@@ -314,7 +315,7 @@ public sealed class RobotWorker(
         }
         catch (Exception ex)
         {
-            var message = $"Connect failed: {ex.Message}";
+            var message = $"Connessione fallita: {ex.Message}";
             if (message != _lastError)
                 AddEvent(EventLevel.Warning, message);
             _lastError = message;
@@ -326,7 +327,7 @@ public sealed class RobotWorker(
         _lastError = null;
         _plans = [.. backend.GetPlanList()];
         _nextPlanListRefresh = time.GetUtcNow() + _options.PlanListRefreshInterval;
-        AddEvent(EventLevel.Info, $"Connected to {backend.Name}: {_plans.Length} plan(s) available.");
+        AddEvent(EventLevel.Info, $"Connesso a {backend.Name}: {_plans.Length} plan disponibili.");
     }
 
     /// <summary>Re-reads the robot plan list periodically while idle, for the remote editor.</summary>
@@ -342,7 +343,7 @@ public sealed class RobotWorker(
         {
             ImmutableArray<string> plans = [.. backend.GetPlanList()];
             if (!plans.SequenceEqual(_plans))
-                AddEvent(EventLevel.Info, $"Robot plan list changed: {plans.Length} plan(s).");
+                AddEvent(EventLevel.Info, $"Elenco dei plan del robot cambiato: {plans.Length} plan.");
             _plans = plans;
         }
         catch (Exception ex)
@@ -353,7 +354,7 @@ public sealed class RobotWorker(
 
     private void HandleLinkLoss(string reason)
     {
-        _lastError = $"Link lost: {reason}";
+        _lastError = $"Collegamento perso: {reason}";
         _pauseLatched = false;
         _status = BackendStatus.Disconnected;
         _nextConnectAttempt = time.GetUtcNow() + _options.ReconnectInterval;
@@ -398,7 +399,7 @@ public sealed class RobotWorker(
         }
         else if (_status.Connected)
         {
-            HandleLinkLoss("backend reports disconnected");
+            HandleLinkLoss("il backend risulta disconnesso");
         }
 
         if (!RobotStateMachine.CanStayPaused(status))
@@ -410,7 +411,7 @@ public sealed class RobotWorker(
             var level = newState is RobotServiceState.Fault or RobotServiceState.EStop or RobotServiceState.Disconnected
                 ? EventLevel.Warning
                 : EventLevel.Info;
-            AddEvent(level, $"State {_state} -> {newState}");
+            AddEvent(level, $"Stato {Labels.Of(_state)} -> {Labels.Of(newState)}");
         }
 
         _state = newState;
@@ -459,12 +460,12 @@ public sealed class RobotWorker(
         {
             logger.LogError(ex, "Error while stopping the robot at shutdown.");
         }
-        FinishCycle(CycleOutcome.Stopped, "Service shutting down.");
+        FinishCycle(CycleOutcome.Stopped, "Arresto del servizio.");
 
         while (commands.TryDequeueStop(out var p) || commands.TryDequeueNormal(out p))
         {
             if (p.TryStart())
-                p.Complete(CommandResult.Cancelled("Worker is shutting down."));
+                p.Complete(CommandResult.Cancelled("Il servizio robot si sta arrestando."));
         }
 
         _state = RobotServiceState.Disconnected;
@@ -472,7 +473,7 @@ public sealed class RobotWorker(
         _states = null;
         _plan = null;
         Publish();
-        AddEvent(EventLevel.Info, "Worker stopped.");
+        AddEvent(EventLevel.Info, "Servizio robot arrestato.");
     }
 
     private void AddEvent(EventLevel level, string message)

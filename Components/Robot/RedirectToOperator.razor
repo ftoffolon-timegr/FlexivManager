@@ -1,0 +1,8 @@
+@inject NavigationManager Navigation
+
+@* Operator host: in-app navigation to any page other than the operator panel lands on the panel. *@
+<p class="text-muted">Pannello operatore…</p>
+
+@code {
+    protected override void OnInitialized() => Navigation.NavigateTo(OperatorPages.Home, replace: true);
+}

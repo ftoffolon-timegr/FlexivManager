@@ -7,7 +7,7 @@
 {
     <button type="button"
             class="btn btn-danger fw-bold stop-button @CssClass"
-            title="Software STOP: stops the robot and switches it to IDLE. Does not replace the hardware emergency stop."
+            title="STOP software: ferma il robot e lo porta in IDLE. Non sostituisce il pulsante di emergenza fisico."
             @onclick="StopAsync">
         <i class="bi bi-stop-circle-fill" aria-hidden="true"></i> STOP
     </button>
@@ -34,6 +34,6 @@
     {
         _error = null;
         var result = await _commands!.StopAsync(Source);
-        _error = result.IsSuccess ? null : $"STOP {result.Outcome}: {result.Message}";
+        _error = result.IsSuccess ? null : $"STOP non eseguito ({result.Outcome}): {result.Message}";
     }
 }

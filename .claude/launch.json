@@ -6,6 +6,13 @@
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "FlexivManager.csproj", "--launch-profile", "http"],
       "port": 8081
+    },
+    {
+      "name": "FlexivManager-robot",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "FlexivManager.csproj", "--launch-profile", "http", "--",
+                      "--Robot:Backend=Flexiv", "--Robot:Flexiv:NetworkInterfaces:0=192.168.2.150", "--Robot:Flexiv:Verbose=true"],
+      "port": 8081
     }
   ]
 }

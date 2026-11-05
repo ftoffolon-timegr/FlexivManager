@@ -44,8 +44,8 @@ public sealed class CycleEvents
 }
 
 /// <summary>
-/// Operator host: persists cycle events. Marks an order Active at its first cycle, stores every cycle in the
-/// history, counts Completed cycles and completes the order when the quantity is reached.
+/// Operator host: persists cycle events. Marks a plan row Active at its first cycle, stores every cycle in the
+/// history, counts Completed cycles and completes the row when the quantity is reached.
 /// </summary>
 public sealed class CycleRecorder(
     CycleEvents cycleEvents,
@@ -64,7 +64,7 @@ public sealed class CycleRecorder(
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     logger.LogError(ex, "Failed to record {Event}", e);
-                    Log(EventLevel.Error, $"Cycle history not saved: {ex.Message}");
+                    Log(EventLevel.Error, $"Storico del ciclo non salvato: {ex.Message}");
                 }
                 finally { cycleEvents.MarkProcessed(); }
             }
@@ -85,8 +85,8 @@ public sealed class CycleRecorder(
                 if (order is not null && finished.Record.Outcome == CycleOutcome.Completed)
                 {
                     Log(EventLevel.Info, order.Status == OrderStatus.Completed
-                        ? $"Order {order.OrderNumber} completed ({order.CompletedCount}/{order.Quantity})."
-                        : $"Order {order.OrderNumber}: {order.CompletedCount}/{order.Quantity} done.");
+                        ? $"Ordine {order.Label} completato ({order.CompletedCount}/{order.Quantity})."
+                        : $"Ordine {order.Label}: {order.CompletedCount}/{order.Quantity} fatti.");
                 }
                 break;
         }

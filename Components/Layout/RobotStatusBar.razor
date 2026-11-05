@@ -8,12 +8,12 @@
     <span class="badge fs-6 @RobotStateStyle.BadgeClass(_snapshot.State)">@RobotStateStyle.Label(_snapshot.State)</span>
     <span class="plan">
         <i class="bi bi-diagram-3" aria-hidden="true"></i>
-        @(_snapshot.CurrentPlan ?? "no plan")
+        @(_snapshot.CurrentPlan ?? "nessun plan")
     </span>
     @if (_stale)
     {
         <span class="badge text-bg-warning">
-            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> stale data
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> dati non aggiornati
         </span>
     }
 </div>

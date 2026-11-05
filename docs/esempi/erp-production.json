@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-05",
+  "generatedAt": "2026-11-05T15:42:10.512+01:00",
+  "articles": [
+    {
+      "articleCode": "A100-45",
+      "status": "Completed",
+      "startedAt": "2026-11-05T07:58:12.304+01:00",
+      "endedAt": "2026-11-05T10:31:47.918+01:00",
+      "durationSeconds": 8640,
+      "quantity": 48,
+      "robotProgram": "PLAN-A100"
+    },
+    {
+      "articleCode": "b-200/7",
+      "status": "Completed",
+      "startedAt": "2026-11-05T10:40:03.115+01:00",
+      "endedAt": "2026-11-05T12:05:55.020+01:00",
+      "durationSeconds": 4710,
+      "quantity": 15,
+      "robotProgram": "PLAN-B200"
+    },
+    {
+      "articleCode": "C300",
+      "status": "InProgress",
+      "startedAt": "2026-11-05T13:15:40.002+01:00",
+      "endedAt": null,
+      "durationSeconds": null,
+      "quantity": null,
+      "robotProgram": "PLAN-C300"
+    }
+  ]
+}

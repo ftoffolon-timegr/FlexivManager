@@ -13,11 +13,14 @@ public sealed class HostEndpointOptions
     /// <summary>Only meaningful for the monitoring host.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Monitoring host: planning pages (jobs, work list) require the editor login.</summary>
+    /// <summary>Monitoring host: planning pages (jobs, work plan) require the editor login.</summary>
     public bool RequireLoginForEdit { get; set; } = true;
 
     /// <summary>Monitoring host: the single planner account.</summary>
     public EditorAccountOptions Editor { get; set; } = new();
+
+    /// <summary>Monitoring host: REST write API (jobs, work plan).</summary>
+    public ApiKeyOptions Api { get; set; } = new();
 
     public IPAddress ParseAddress(string hostName) =>
         IPAddress.TryParse(Address, out var ip)
@@ -37,8 +40,22 @@ public sealed class EditorAccountOptions
 }
 
 /// <summary>
+/// Key required in the <c>X-Api-Key</c> header by the REST write API. Reading stays open, like the pages.
+/// </summary>
+public sealed class ApiKeyOptions
+{
+    public const string HeaderName = "X-Api-Key";
+
+    /// <summary>Shared secret of the calling system. Empty: the write API refuses every call.</summary>
+    public string Key { get; set; } = "";
+
+    /// <summary>Name written in the event log and in "updated by" for changes made through the API.</summary>
+    public string ClientName { get; set; } = "api";
+}
+
+/// <summary>
 /// Which host a component is rendered on. Operator (local): executes, never edits.
-/// Monitoring (remote): configures jobs and the work list, never moves the robot.
+/// Monitoring (remote): configures jobs and the work plan, never moves the robot.
 /// </summary>
 public sealed record HostRole(string Name, bool CanCommand, bool CanEdit)
 {
@@ -48,6 +65,6 @@ public sealed record HostRole(string Name, bool CanCommand, bool CanEdit)
 
 public static class Policies
 {
-    /// <summary>Planning edits (jobs, work list). Login required unless disabled in configuration.</summary>
+    /// <summary>Planning edits (jobs, work plan). Login required unless disabled in configuration.</summary>
     public const string Planner = "Planner";
 }

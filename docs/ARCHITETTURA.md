@@ -14,8 +14,8 @@ Un solo processo (in futuro servizio Windows) con **due host web** che condivido
 
 | Host | Indirizzo | Ruolo |
 |------|-----------|-------|
-| **Operator** (locale) | `127.0.0.1:8081`, solo loopback (verificato all'avvio) | esegue: selezione codice/ordine, Avvia con conferma, Pausa/Riprendi/Stop, STOP, Enable, Clear fault |
-| **Monitoring** (remoto) | `Hosts:Monitoring:Address`:8080 (8090 in sviluppo) | consulta e pianifica: dati robot, plan del robot, codici→plan, lista ordini. **Nessun comando robot** |
+| **Operator** (locale) | `127.0.0.1:8081`, solo loopback (verificato all'avvio) | esegue: selezione di una riga del piano di oggi o di un codice di servizio, Avvia con conferma, Pausa/Riprendi/Stop, STOP, Enable, Clear fault, esito qualità del pezzo |
+| **Monitoring** (remoto) | `Hosts:Monitoring:Address`:8080 (8090 in sviluppo) | consulta e pianifica: dati robot, plan del robot, codici→plan, piano di lavoro giornaliero e report. Modifiche via pagine (login) o API REST (API key). **Nessun comando robot** |
 
 ```mermaid
 flowchart LR
@@ -35,8 +35,9 @@ flowchart LR
         Rec["CycleRecorder"]
         Backend["IRobotBackend<br/>MockBackend / (FlexivBackend)"]
         subgraph MonHost["Host Monitoring :8080"]
-            MonPages["Pagine remote<br/>Plans, Jobs, Orders"]
-            Plan["PlanningService<br/>(login richiesto)"]
+            MonPages["Pagine remote<br/>Plans, Jobs, Piano giornaliero"]
+            WApi["/api/* scrittura<br/>(X-Api-Key)"]
+            Plan["PlanningService<br/>(login o API key)"]
             Api["/api/* sola lettura"]
         end
     end
@@ -49,6 +50,7 @@ flowchart LR
     Worker --> CE --> Rec --> Store
     Worker --> Log
     MonPages --> Plan --> Store
+    WApi --> Plan
     MonPages --> Snap
     Api --> Snap
     Api --> Store
@@ -102,23 +104,41 @@ Impostazioni comuni in `Directory.Build.props` (x64, nullable, C# latest). Soluz
 | File | Contenuto |
 |------|-----------|
 | `Commands/RobotCommand.cs` | Record dei comandi (`StopCommand`, `EnableCommand`, `StartCycleCommand`, `PausePlanCommand`, …), `IsMotion`, `CommandResult` |
-| `Commands/CommandPolicy.cs` | Quali comandi sono ammessi in quale stato; limiti di velocità |
+| `Commands/CommandPolicy.cs` | Quali comandi sono ammessi in quale stato |
 | `Commands/RobotCommandService.cs` | Punto d'ingresso unico (solo host locale): code con priorità STOP, timeout con ritiro dei comandi non partiti, conferma a due passi (`RequestStartAsync`/`ConfirmAsync`), ciclo successivo di un ordine con una pressione (`CanRepeatWithoutConfirmation`, `StartNextCycleAsync`) |
 
-### 3.3 Pianificazione: codici, ordini, cicli
+### 3.3 Pianificazione: codici, piano giornaliero, cicli
 
 | File | Contenuto |
 |------|-----------|
-| `Planning/Job.cs` | `Job` (codice → un plan + velocità, versionato), `JobDraft`, `JobHistoryEntry`, regole `ProductCode` (normalizzazione per barcode) |
-| `Planning/ProductionOrder.cs` | `ProductionOrder` (numero, codice, quantità, fatti, stato, posizione), `OrderStatus`, `OrderDraft` |
+| `Planning/Job.cs` | `Job` (codice → un plan, eseguito così come programmato in Elements; versionato; `IsService` per codici di servizio come HOME), `JobDraft`, `JobHistoryEntry`, regole `ProductCode` (normalizzazione per barcode) |
+| `Planning/ProductionOrder.cs` | `ProductionOrder` = riga del piano giornaliero (giorno, codice, quantità, numero ordine facoltativo, fatti, stato, posizione), `OrderStatus` (con `CarriedOver`), `OrderDraft`, `WorkDay.Today` |
+| `Planning/DailyReport.cs` | Report del giorno calcolato dalle righe: avanzamento per riga (fatto / in corso / mancante / annullato / riportato) e totali pezzi. Usato da pagina e API |
 | `Planning/Cycle.cs` | `CycleRequest`, `ActiveCycle`, `CycleRecord`, `CycleOutcome` |
 | `Planning/IPlanningStore.cs` | `IPlanningReader` (entrambi gli host) e `IPlanningStore` (scritture); `PlanningConflictException` |
-| `Planning/PlanningValidator.cs` | Normalizzazione e validazione lato server di codici e ordini |
-| `Planning/PlanningService.cs` | Modifiche remote (solo host remoto): controllo login, validazione, log di chi/cosa |
-| `Planning/ScanService.cs` | Risoluzione barcode (solo host locale): primo ordine aperto con quel codice, altrimenti lavoro singolo |
-| `Planning/CycleRecorder.cs` | `CycleEvents` (passaggio non bloccante dal worker) e `CycleRecorder` (salva cicli, attiva/conta/completa ordini) |
+| `Planning/PlanningValidator.cs` | Normalizzazione e validazione lato server di codici e righe |
+| `Planning/PlanningService.cs` | Modifiche remote (solo host remoto, da pagine e API): controllo login, validazione, giorno non passato, "copia mancanti", report, log di chi/cosa |
+| `Planning/ScanService.cs` | Risoluzione barcode (solo host locale): prima riga aperta di oggi con quel codice; codice di servizio senza riga; altrimenti rifiutato |
+| `Planning/CycleRecorder.cs` | `CycleEvents` (passaggio non bloccante dal worker) e `CycleRecorder` (salva cicli, attiva/conta/completa righe) |
+
+**Regole del piano giornaliero**
+- L'operatore vede ed esegue solo le righe aperte del piano di **oggi** (data locale del PC), in qualsiasi ordine. I codici di servizio sono sempre disponibili e non si contano.
+- Una riga si completa quando i pezzi fatti raggiungono la quantità. Rilavora toglie il pezzo dai fatti: la riga può riaprirsi.
+- A fine giornata i pezzi mancanti restano "mancanti" nel report. "Copia mancanti" crea nel giorno successivo (o oggi, se il successivo è già passato) nuove righe con la quantità rimanente e chiude le originali come `CarriedOver`.
 
 ---
+
+### 3.4 Interfaccia con il gestionale (`Erp/`)
+
+- `ArticleFile`: legge il file del gestionale (un codice per riga, codifica, righe scartate).
+- `ArticleImporter`: legge la cartella `Erp:ImportFolder`, salva i codici (`IErpStore`, tabella `Articles`) e
+  **solo dopo** cancella il file (conferma al gestionale). Una lettura alla volta; `LastScan` per pagina e API.
+- `ArticleImportService`: lettura automatica ogni `Erp:PollInterval`, registrata sull'host operatore (sempre
+  attivo); la lettura manuale (`POST /api/erp/articles/import`, pulsante in Codici lavoro) è sull'host remoto.
+- `ProductionExport` / `ProductionExportService`: dati di produzione del giorno per codice articolo, calcolati
+  dai cicli registrati (`Cycles`), dagli ordini del giorno e dal ciclo in corso nella snapshot.
+
+Dettagli in [INTEGRAZIONE-GESTIONALE.md](INTEGRAZIONE-GESTIONALE.md).
 
 ## 4. RobotGateway.Mock
 
@@ -133,11 +153,11 @@ Impostazioni comuni in `Directory.Build.props` (x64, nullable, C# latest). Soluz
 
 | File | Contenuto |
 |------|-----------|
-| `PlanningDbContext.cs` | Tabelle `Jobs`, `JobHistory`, `Orders`, `Cycles`, con indici e token di concorrenza |
-| `SqlitePlanningStore.cs` | Implementa `IPlanningStore`: scritture serializzate, controllo versioni (avviso di conflitto), regole degli ordini (solo i Pending si modificano/spostano, numero unico tra gli aperti), conteggio e completamento |
+| `PlanningDbContext.cs` | Tabelle `Jobs`, `JobHistory`, `Orders` (righe del piano, con `WorkDate`), `Cycles` (con esito qualità), con indici e token di concorrenza |
+| `SqlitePlanningStore.cs` | Implementa `IPlanningStore`: scritture serializzate, controllo versioni (avviso di conflitto), regole delle righe (solo le Pending si modificano/spostano nel loro giorno, numero ordine unico tra gli aperti se indicato), conteggio, esiti qualità, "copia mancanti" |
 | `DataServiceCollectionExtensions.cs` | `PlanningStoreOptions` (sezione `Planning`) e registrazione DI |
 
-Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema richiederanno le migrazioni EF.
+Schema creato al primo avvio (`EnsureCreated`). Le colonne nuove vengono aggiunte all'avvio (`ALTER TABLE` in `EnsureCreated`): le righe create prima del piano giornaliero prendono come giorno la data di creazione.
 
 ---
 
@@ -153,8 +173,9 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 | `Hosting/HostOptions.cs` | Indirizzi, login, `HostRole` (`CanCommand`/`CanEdit`), nome policy `Planner` |
 | `Hosting/AccountEndpoints.cs` | Login a utente singolo (pagina HTML + POST con antiforgery, cookie) e logout. Solo host remoto |
 | `Hosting/PasswordHasher.cs` | Hash PBKDF2-SHA256 della password |
-| `Hosting/DemoSeed.cs` | Codici e ordini di esempio (solo sviluppo, `Planning:SeedDemoData`) |
-| `Api/ReadOnlyApi.cs` | API GET: `/api/status`, `/telemetry`, `/events`, `/plans`, `/jobs`, `/orders`, `/cycles` |
+| `Hosting/DemoSeed.cs` | Codici e righe di esempio (solo sviluppo, `Planning:SeedDemoData`) |
+| `Api/ReadOnlyApi.cs` | API GET aperta, entrambi gli host: `/api/status`, `/telemetry`, `/events`, `/plans`, `/jobs`, `/orders`, `/cycles`, `/plan`, `/report` |
+| `Api/PlanningApi.cs` | API di scrittura, solo host remoto, header `X-Api-Key`: codici e righe del piano (crea, modifica, annulla, sposta, copia mancanti). Passa da `PlanningService` come le pagine. Dettagli in [API-REST.md](API-REST.md) |
 
 ### 6.2 Cosa è registrato su ciascun host
 
@@ -163,7 +184,8 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 | `IRobotBackend`, `RobotWorker`, `CycleRecorder` | ✔ | ✘ |
 | `RobotCommandService` | ✔ | ✘ |
 | `ScanService` | ✔ | ✘ |
-| `PlanningService` (modifiche) | ✘ | ✔ (login) |
+| `PlanningService` (modifiche) | ✘ | ✔ (login o API key) |
+| API di scrittura `/api/...` | ✘ | ✔ (API key) |
 | `IPlanningReader`, `SnapshotStore`, `EventLog` | ✔ | ✔ (stesse istanze) |
 | Login cookie | ✘ | ✔ |
 
@@ -171,12 +193,13 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 
 | File | Host | Contenuto |
 |------|------|-----------|
-| `Components/Pages/Operator.razor` | locale | Campo barcode (lettore USB in emulazione tastiera), lista ordini, lavoro singolo, Avvia con dialogo di conferma, esecuzione, Pausa/Riprendi/Stop/STOP, Enable/Clear fault |
+| `Components/Pages/Operator.razor` | locale | Zona codice (lettore barcode USB in emulazione tastiera, anche tastiera; popup se il codice non è accettato), START e STOP grandi (conferma sul primo pezzo di una riga), Enable/Clear fault, piano di oggi in sola lettura (da fare / in corso / fatto) |
 | `Components/Robot/StopButton.razor` | locale | STOP software; non compare dove manca il servizio comandi |
 | `Components/Pages/RobotStatus.razor` | entrambi | Diagnostica: stato, giunti, pose TCP, forze, eventi |
 | `Components/Pages/RobotPlans.razor` | remoto | Plan presenti sul robot e codici che li usano |
 | `Components/Pages/Jobs.razor`, `JobEdit.razor` | remoto | Elenco codici (aperto) e modifica (login) con storico |
-| `Components/Pages/Orders.razor`, `OrderEdit.razor` | remoto | Lista ordini: aggiungi, modifica, sposta, annulla; ordini chiusi e storico cicli |
+| `Components/Pages/Orders.razor` (`/orders`, `/plan`) | remoto | Piano giornaliero con scelta del giorno e report (pezzi fatti/mancanti, righe fatte/in corso/mancanti); aggiungi, sposta, annulla, "copia mancanti"; ultimi cicli con esito |
+| `Components/Pages/OrderEdit.razor` | remoto | Nuova riga / modifica di una riga non iniziata: giorno, codice, quantità, numero ordine facoltativo, note |
 | `Components/Planning/PlannerAccount.razor`, `RedirectToLogin.razor` | remoto | Stato login, logout, reindirizzamento al login |
 | `Components/Routes.razor` | entrambi | Routing con autorizzazione (`AuthorizeRouteView`) |
 
@@ -193,13 +216,14 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 | `Hosts:Monitoring:Address` / `Port` | `127.0.0.1` / `8080` (8090 in sviluppo) | Impostare l'IP della rete interna in produzione |
 | `Hosts:Monitoring:RequireLoginForEdit` | `true` | Login per le modifiche remote |
 | `Hosts:Monitoring:Editor:UserName` / `PasswordHash` | `planner` / vuoto | Hash da `FlexivManager.exe hash-password …`; vuoto = pianificazione in sola lettura |
+| `Hosts:Monitoring:Api:Key` | vuoto (`dev-api-key` in sviluppo) | Chiave dell'API di scrittura (header `X-Api-Key`); vuoto = API di scrittura disattivata. In produzione: valore lungo e casuale, fuori dal controllo sorgenti |
+| `Hosts:Monitoring:Api:ClientName` | `api` | Nome registrato in "modificato da" e nel log per le modifiche via API |
 | `Planning:DatabasePath` | `data/planning.db` | File SQLite |
 | `Planning:SeedDemoData` | `false` (`true` in sviluppo) | Dati di esempio se il DB è vuoto |
 | `Robot:PollRateHz` | `50` | Frequenza del worker |
 | `Robot:AutoConnect` / `ReconnectInterval` | `true` / 3 s | Connessione e riconnessione automatica (mai abilitazione) |
 | `Robot:DefaultCommandTimeout` | 5 s | Timeout comandi |
 | `Robot:ConfirmationTimeout` | 15 s | Validità del token di conferma |
-| `Robot:MaxVelocityScale` | `100` | Limite globale della velocità dei codici |
 | `Robot:PlanStartTimeout` | 5 s | Il plan avviato deve risultare in esecuzione entro questo tempo |
 | `Robot:PlanListRefreshInterval` | 10 s | Rilettura della lista plan a robot fermo |
 | `Robot:Mock:EnableDelay` | 1.5 s | Solo simulatore |
@@ -218,10 +242,10 @@ Schema creato al primo avvio (`EnsureCreated`). Le modifiche future allo schema 
 | `RobotStateMachineTests.cs`, `CommandPolicyTests.cs` | Derivazione stati, comandi ammessi |
 | `SnapshotAndCommandServiceTests.cs` | Code, priorità STOP, ritiro su timeout, conferma, ciclo successivo con una pressione |
 | `MockBackendTests.cs` | Comportamento del simulatore |
-| `PlanningTests.cs` | Normalizzazione codici, validazione, login per modifiche, conflitti, barcode |
-| `PlanningStoreTests.cs` | Ordinamento, spostamenti, conteggio, completamento, annullamento (SQLite reale) |
+| `PlanningTests.cs` | Normalizzazione codici, validazione, login per modifiche, conflitti, barcode sul piano di oggi, report giornaliero |
+| `PlanningStoreTests.cs` | Righe per giorno, spostamenti, conteggio, completamento, annullamento, esiti qualità, copia mancanti (SQLite reale) |
 | `RobotWorkerTests.cs` | Integrazione: ordini completi, fault non contato, STOP, pausa, modifiche durante il ciclo |
-| `HostingTests.cs` | Due host reali: servizi per host, API, login, porta occupata, indirizzo non loopback |
+| `HostingTests.cs` | Due host reali: servizi per host, API in lettura, API di scrittura con/senza chiave, login, porta occupata, indirizzo non loopback |
 | `TestPlanning.cs`, `ManualTimeProvider.cs` | Supporto ai test |
 
 ---
@@ -282,7 +306,7 @@ Il wrapper upstream è scritto per RDK 1.9. Le funzioni assenti in 1.8 (`actions
 | `Enable()` | `Enable()` | Lo stato operativo arriva dal polling |
 | `ClearFault()` | `ClearFault(timeout)` | **Bloccante** fino a `ClearFaultTimeoutSeconds` (3 s); il robot è in fault, quindi fermo |
 | `SwitchMode(mode)` | `SwitchMode(...)` | Solo modi NRT; i modi RT non sono mai usati |
-| `SetVelocityScale(p)` | `SetVelocityScale(p)` | |
+| `SetVelocityScale(p)` | `SetVelocityScale(p)` | Solo dal worker, sempre a 100 % prima di ogni plan: il plan gira alle velocità programmate in Elements, senza ereditare un override lasciato da Elements o dal pendant |
 | `ExecutePlan(name, false)` | `ExecutePlan(name, false, blockUntilStarted: true)` | Ritorna a plan avviato (tipicamente < 200 ms) |
 | `PausePlan(bool)` | `PausePlan(bool)` | I plan interni (non creati dall'utente) non si possono riprendere |
 | `StopPlan()` | `StopPlan()` | NRT_PLAN_EXECUTION |
@@ -310,4 +334,4 @@ Il wrapper segnala ogni errore nativo come `System.Exception` con `[Flexiv RDK E
 2. DLL nativa presente in `src/RobotGateway.Flexiv/native/rdk-1.8/` (compilata con lo script).
 3. In `appsettings.json`: `Robot:Backend = Flexiv`; serial e `RdkVersion` sono già impostati.
 4. Avviare: il servizio si **connette soltanto**. Verificare su `/robot` lo stato, i giunti, i plan letti e gli eventi.
-5. Solo dopo: Enable dalla pagina Operator, poi un codice con un plan breve a velocità bassa, con la mano sull'arresto di emergenza.
+5. Solo dopo: Enable dalla pagina Operator, poi un codice con un plan breve (velocità basse impostate nel plan stesso, in Elements), con la mano sull'arresto di emergenza.

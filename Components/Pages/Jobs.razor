@@ -2,50 +2,123 @@
 @inject SnapshotStore Store
 @inject IPlanningReader Planning
 @inject HostRole Role
+@inject IErpStore Erp
+@inject ArticleImporter Importer
 
-<PageTitle>Jobs</PageTitle>
+<PageTitle>Codici lavoro</PageTitle>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-    <h1 class="mb-0">Jobs</h1>
+    <h1 class="mb-0">Codici lavoro</h1>
     <PlannerAccount />
 </div>
-<p class="text-muted small">Product / job code → robot plan. Several codes may use the same plan. Changes apply from the next cycle.</p>
+<p class="text-muted small">Codice prodotto / lavoro → plan del robot. Più codici possono usare lo stesso plan. Le modifiche valgono dal ciclo successivo.</p>
 
 @if (Role.CanEdit)
 {
-    <a class="btn btn-primary mb-3" href="jobs/new"><i class="bi bi-plus-lg" aria-hidden="true"></i> New job</a>
+    <a class="btn btn-primary mb-3" href="jobs/new"><i class="bi bi-plus-lg" aria-hidden="true"></i> Nuovo codice</a>
 }
+
+@* Article codes received from the ERP that still have no robot plan. *@
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <h2 class="h5 mb-0">Codici articolo dal gestionale</h2>
+            @if (Role.CanEdit)
+            {
+                <AuthorizeView Policy="@Policies.Planner">
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@_scanning" @onclick="ScanAsync">
+                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Verifica nuovo file
+                    </button>
+                </AuthorizeView>
+            }
+        </div>
+        <p class="small text-muted mb-2">
+            @_articles.Count codici ricevuti, @_unassigned.Count senza programma robot.
+            Cartella: <code>@(Importer.Folder.Length > 0 ? Importer.Folder : "non configurata")</code>
+            @if (!Importer.Options.Enabled)
+            {
+                <span class="badge text-bg-secondary ms-1">verifica automatica disattivata</span>
+            }
+        </p>
+        @if (Importer.LastScan is { } scan)
+        {
+            <p class="small mb-2 @(scan.Success ? "text-muted" : "text-danger")">
+                Ultima verifica @scan.At.ToLocalTime().ToString("g") (@scan.Trigger):
+                @if (scan.Error is not null)
+                {
+                    @scan.Error
+                }
+                else if (scan.Files.Count == 0)
+                {
+                    <text>nessun file nuovo.</text>
+                }
+                else
+                {
+                    @($"{scan.Files.Count} file letti, {scan.CodesAdded} codici nuovi.")
+                    @foreach (var file in scan.Files.Where(f => f.Error is not null || f.Rejected.Count > 0))
+                    {
+                        <br />@($"{file.FileName}: {file.Error ?? $"{file.Rejected.Count} righe scartate"}")
+                    }
+                }
+            </p>
+        }
+        @if (_unassigned.Count > 0)
+        {
+            <div class="d-flex flex-wrap gap-2">
+                @foreach (var article in _unassigned)
+                {
+                    @if (Role.CanEdit)
+                    {
+                        <a class="btn btn-sm btn-outline-warning" href="@($"jobs/new?code={Uri.EscapeDataString(article.RawCode)}")"
+                           title="Ricevuto il @article.FirstImportedAt.ToLocalTime().ToString("g"): associa un programma">
+                            @article.RawCode <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                        </a>
+                    }
+                    else
+                    {
+                        <span class="badge text-bg-warning">@article.RawCode</span>
+                    }
+                }
+            </div>
+        }
+    </div>
+</div>
 
 <div class="table-responsive">
     <table class="table table-sm align-middle">
         <thead>
-            <tr><th>Code</th><th>Plan</th><th>On robot</th><th>Velocity</th><th>Description</th><th>Enabled</th><th>Updated</th><th></th></tr>
+            <tr><th>Codice</th><th>Plan</th><th>Sul robot</th><th>Descrizione</th><th>Attivo</th><th>Aggiornato</th><th></th></tr>
         </thead>
         <tbody>
             @foreach (var job in _jobs)
             {
                 var onRobot = Store.Current.AvailablePlans.Contains(job.PlanName);
                 <tr class="@(job.Enabled ? "" : "text-muted")">
-                    <td class="fw-semibold">@job.ProductCode</td>
+                    <td class="fw-semibold">
+                        @job.ProductCode
+                        @if (job.IsService)
+                        {
+                            <span class="badge text-bg-info ms-1">servizio</span>
+                        }
+                    </td>
                     <td><code>@job.PlanName</code></td>
                     <td>
                         @if (onRobot)
                         {
-                            <i class="bi bi-check-circle-fill text-success" aria-label="yes"></i>
+                            <i class="bi bi-check-circle-fill text-success" aria-label="sì"></i>
                         }
                         else
                         {
-                            <span class="badge text-bg-warning">missing</span>
+                            <span class="badge text-bg-warning">mancante</span>
                         }
                     </td>
-                    <td>@job.VelocityScale %</td>
                     <td class="small">@job.Description</td>
-                    <td>@(job.Enabled ? "yes" : "no")</td>
+                    <td>@(job.Enabled ? "sì" : "no")</td>
                     <td class="small text-muted">v@(job.Version) · @job.UpdatedBy · @job.UpdatedAt.ToLocalTime().ToString("g")</td>
                     <td class="text-end">
                         @if (Role.CanEdit)
                         {
-                            <a class="btn btn-sm btn-outline-primary" href="jobs/@job.Id"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</a>
+                            <a class="btn btn-sm btn-outline-primary" href="jobs/@job.Id"><i class="bi bi-pencil" aria-hidden="true"></i> Modifica</a>
                         }
                     </td>
                 </tr>
@@ -55,11 +128,36 @@
 </div>
 @if (_jobs.Count == 0)
 {
-    <p class="text-muted">No jobs yet.</p>
+    <p class="text-muted">Nessun codice ancora.</p>
 }
 
 @code {
     private IReadOnlyList<Job> _jobs = [];
+    private IReadOnlyList<ArticleCode> _articles = [];
+    private IReadOnlyList<ArticleCode> _unassigned = [];
+    private bool _scanning;
 
-    protected override async Task OnInitializedAsync() => _jobs = await Planning.ListJobsAsync();
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _jobs = await Planning.ListJobsAsync();
+        _articles = await Erp.ListArticlesAsync();
+        var associated = _jobs.Select(j => j.ProductCode).ToHashSet(StringComparer.Ordinal);
+        _unassigned = _articles.Where(a => !associated.Contains(a.Code)).ToList();
+    }
+
+    private async Task ScanAsync()
+    {
+        _scanning = true;
+        try
+        {
+            var user = (await AuthState).User.Identity?.Name;
+            await Importer.ScanAsync(string.IsNullOrEmpty(user) ? "pagina" : user);
+            await LoadAsync();
+        }
+        finally { _scanning = false; }
+    }
 }

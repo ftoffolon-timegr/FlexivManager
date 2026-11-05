@@ -1,7 +1,8 @@
 namespace RobotGateway.Core;
 
 /// <summary>
-/// Association product/job code -> one robot plan (stored in Flexiv Elements) with its velocity.
+/// Association product/job code -> one robot plan (stored in Flexiv Elements). The plan is the whole
+/// machining of the code and runs exactly as programmed in Elements (no velocity override).
 /// Several codes may point to the same plan. Immutable: a running cycle keeps the version it started with.
 /// </summary>
 public sealed record Job
@@ -12,9 +13,14 @@ public sealed record Job
     public required string ProductCode { get; init; }
 
     public required string PlanName { get; init; }
-    public int VelocityScale { get; init; } = 100;
     public string? Description { get; init; }
     public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Service code (e.g. HOME): always available to the operator even when not in today's plan,
+    /// never counted.
+    /// </summary>
+    public bool IsService { get; init; }
 
     /// <summary>Incremented on every save; optimistic concurrency and audit.</summary>
     public int Version { get; init; }
@@ -23,11 +29,11 @@ public sealed record Job
     public DateTimeOffset UpdatedAt { get; init; }
     public string UpdatedBy { get; init; } = "";
 
-    public string Describe() => $"'{ProductCode}' -> {PlanName} @ {VelocityScale} % (v{Version})";
+    public string Describe() => $"'{ProductCode}' -> {PlanName}{(IsService ? " [servizio]" : "")} (v{Version})";
 }
 
 /// <summary>Editable content of a job, as submitted by the editor.</summary>
-public sealed record JobDraft(string ProductCode, string PlanName, int VelocityScale, string? Description, bool Enabled);
+public sealed record JobDraft(string ProductCode, string PlanName, string? Description, bool Enabled, bool IsService = false);
 
 /// <summary>Audit trail: one entry per create/update/delete, with the saved content as JSON.</summary>
 public sealed record JobHistoryEntry(int JobId, int Version, string Action, string ProductCode, string User, DateTimeOffset At, string Json);
@@ -47,9 +53,9 @@ public static class ProductCode
     /// <returns>Null when the normalized code is valid, otherwise the reason.</returns>
     public static string? Validate(string normalized)
     {
-        if (normalized.Length == 0) return "Product code is required.";
-        if (normalized.Length > MaxLength) return $"Product code is longer than {MaxLength} characters.";
-        if (normalized.Any(c => c is < ' ' or > '~')) return "Product code may contain printable ASCII characters only.";
+        if (normalized.Length == 0) return "Il codice è obbligatorio.";
+        if (normalized.Length > MaxLength) return $"Il codice supera {MaxLength} caratteri.";
+        if (normalized.Any(c => c is < ' ' or > '~')) return "Il codice può contenere solo caratteri ASCII stampabili.";
         return null;
     }
 }

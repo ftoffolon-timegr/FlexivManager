@@ -1,70 +1,143 @@
 @page "/orders"
+@page "/plan"
 @implements IAsyncDisposable
 @inject IPlanningReader Planning
 @inject IServiceProvider Services
 @inject HostRole Role
+@inject TimeProvider Time
+@inject NavigationManager Navigation
 
-<PageTitle>Work list</PageTitle>
+<PageTitle>Ordini di produzione</PageTitle>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-    <h1 class="mb-0">Work list</h1>
+    <h1 class="mb-0">Ordini di produzione</h1>
     <PlannerAccount />
 </div>
 <p class="text-muted small">
-    Production orders, worked top to bottom at the local station. The order in progress stays on top and can only be cancelled.
-    Each cycle runs the job's plan once; the order completes when the quantity is reached.
+    Codici e quantità da lavorare ogni giorno. La postazione locale esegue solo gli ordini aperti di oggi, in qualsiasi sequenza;
+    ogni ciclo esegue una volta il plan del codice.
 </p>
+
+@* ---- Day selection ---- *@
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <button class="btn btn-outline-secondary" title="Giorno precedente" @onclick="() => GoTo(_date.AddDays(-1))"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+    <input type="date" class="form-control" style="max-width: 11rem" value="@(_date.ToString("yyyy-MM-dd"))" @onchange="OnDateChanged" />
+    <button class="btn btn-outline-secondary" title="Giorno successivo" @onclick="() => GoTo(_date.AddDays(1))"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+    @if (_date != _today)
+    {
+        <button class="btn btn-outline-primary" @onclick="() => GoTo(_today)">Oggi</button>
+    }
+    <span class="badge @(_date == _today ? "text-bg-primary" : "text-bg-secondary")">@DayLabel</span>
+</div>
 
 @if (_message is not null)
 {
     <div class="alert @(_messageOk ? "alert-success" : "alert-danger") py-2">@_message</div>
 }
 
-@if (Role.CanEdit)
+@* ---- Report of the day ---- *@
+@{
+    var t = _report.Totals;
+}
+<div class="row g-2 mb-3">
+    <div class="col-6 col-lg-4">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">Pezzi fatti</div>
+            <div class="fs-4 fw-semibold">@t.Done <span class="fs-6 text-muted">/ @t.Planned</span></div>
+            <div class="progress mt-1" style="height: .4rem" role="progressbar" aria-label="Pezzi fatti">
+                <div class="progress-bar bg-success" style="width: @Percent(t.Done, t.Planned)%"></div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-4">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">Pezzi mancanti</div>
+            <div class="fs-4 fw-semibold @(t.Missing > 0 ? "text-warning" : "")">@t.Missing</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-4">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">Ordini</div>
+            <div class="small">
+                <span class="badge text-bg-success">@t.RowsDone completati</span>
+                <span class="badge text-bg-primary">@t.RowsInProgress in corso</span>
+                <span class="badge text-bg-secondary">@t.RowsMissing mancanti</span>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+@* ---- Planner actions ---- *@
+@if (Role.CanEdit && _planning is not null)
 {
     <AuthorizeView Policy="@Policies.Planner">
-        <a class="btn btn-primary mb-3" href="orders/new"><i class="bi bi-plus-lg" aria-hidden="true"></i> New order</a>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            @if (_date >= _today)
+            {
+                <a class="btn btn-primary" href="@($"orders/new?date={_date:yyyy-MM-dd}")"><i class="bi bi-plus-lg" aria-hidden="true"></i> Aggiungi ordine</a>
+            }
+            @if (HasMissing)
+            {
+                var target = _planning!.CopyTargetFor(_date);
+                var targetLabel = target.ToString("ddd dd/MM");
+                if (_confirmCopy)
+                {
+                    <button class="btn btn-warning" disabled="@_busy" @onclick="CopyMissingAsync">Conferma: copia su @targetLabel</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmCopy = false">Annulla</button>
+                }
+                else
+                {
+                    <button class="btn btn-outline-warning" title="@($"Gli ordini aperti con pezzi mancanti vengono chiusi qui e copiati negli ordini del {target:dd/MM/yyyy} con la quantità mancante")"
+                            @onclick="() => _confirmCopy = true">
+                        <i class="bi bi-calendar-plus" aria-hidden="true"></i> Copia mancanti su @targetLabel
+                    </button>
+                }
+            }
+        </div>
     </AuthorizeView>
 }
 
+@* ---- Rows of the day ---- *@
 <section class="mb-4">
-    <h2 class="h5">Open orders</h2>
     <div class="table-responsive">
         <table class="table table-sm align-middle">
             <thead>
-                <tr><th>#</th><th>Order</th><th>Code</th><th>Done</th><th>Status</th><th>Notes</th><th>Updated</th><th></th></tr>
+                <tr>
+                    <th>#</th><th>Codice</th><th>N. ordine</th><th class="text-end">Q.tà</th><th class="text-end">Fatti</th><th class="text-end">Mancanti</th>
+                    <th>Avanzamento</th><th>Note</th><th></th>
+                </tr>
             </thead>
             <tbody>
-                @for (var i = 0; i < _open.Count; i++)
+                @for (var i = 0; i < _report.Rows.Count; i++)
                 {
-                    var o = _open[i];
-                    var first = i == 0;
-                    <tr class="@(first ? "table-active" : "")">
+                    var (o, progress) = (_report.Rows[i].Row, _report.Rows[i].Progress);
+                    <tr class="@(o.IsOpen ? "" : "text-muted")">
                         <td>@(i + 1)</td>
-                        <td class="fw-semibold">@o.OrderNumber @if (first) {<span class="badge text-bg-info ms-1">current</span>}</td>
-                        <td>@o.ProductCode</td>
-                        <td>@o.CompletedCount / @o.Quantity</td>
-                        <td><span class="badge @StatusClass(o.Status)">@o.Status</span></td>
+                        <td class="fw-semibold">@o.ProductCode</td>
+                        <td>@o.OrderNumber</td>
+                        <td class="text-end">@o.Quantity</td>
+                        <td class="text-end">@o.CompletedCount</td>
+                        <td class="text-end">@(progress == RowProgress.Cancelled ? "–" : o.Remaining.ToString())</td>
+                        <td><span class="badge @ProgressClass(progress)">@ProgressLabel(progress)</span></td>
                         <td class="small">@o.Notes</td>
-                        <td class="small text-muted">@o.UpdatedBy · @o.UpdatedAt.ToLocalTime().ToString("g")</td>
                         <td class="text-end text-nowrap">
-                            @if (_planning is not null)
+                            @if (_planning is not null && o.IsOpen)
                             {
                                 <AuthorizeView Policy="@Policies.Planner" Context="auth">
-                                    @if (o.Status == OrderStatus.Pending)
+                                    @if (o.Status == OrderStatus.Pending && _date >= _today)
                                     {
-                                        <button class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@_busy" @onclick="() => MoveAsync(o, -1)"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
-                                        <button class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@_busy" @onclick="() => MoveAsync(o, 1)"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
-                                        <a class="btn btn-sm btn-outline-primary" href="orders/@o.Id"><i class="bi bi-pencil" aria-hidden="true"></i></a>
+                                        <button class="btn btn-sm btn-outline-secondary" title="Sposta su" disabled="@_busy" @onclick="() => MoveAsync(o, -1)"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
+                                        <button class="btn btn-sm btn-outline-secondary" title="Sposta giù" disabled="@_busy" @onclick="() => MoveAsync(o, 1)"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
+                                        <a class="btn btn-sm btn-outline-primary" title="Modifica" href="orders/@o.Id"><i class="bi bi-pencil" aria-hidden="true"></i></a>
                                     }
                                     @if (_confirmCancelId == o.Id)
                                     {
-                                        <button class="btn btn-sm btn-danger" disabled="@_busy" @onclick="() => CancelAsync(o)">Confirm cancel</button>
-                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmCancelId = null">Keep</button>
+                                        <button class="btn btn-sm btn-danger" disabled="@_busy" @onclick="() => CancelAsync(o)">Conferma annullamento</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmCancelId = null">Mantieni</button>
                                     }
                                     else
                                     {
-                                        <button class="btn btn-sm btn-outline-danger" title="Cancel order" @onclick="() => _confirmCancelId = o.Id"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                                        <button class="btn btn-sm btn-outline-danger" title="Annulla ordine" @onclick="() => _confirmCancelId = o.Id"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                                     }
                                 </AuthorizeView>
                             }
@@ -74,27 +147,27 @@
             </tbody>
         </table>
     </div>
-    @if (_open.Count == 0)
+    @if (_report.Rows.Count == 0)
     {
-        <p class="text-muted">No open orders.</p>
+        <p class="text-muted">Nessun ordine di produzione per questo giorno.</p>
     }
 </section>
 
-<section class="mb-4">
-    <h2 class="h5">Recent cycles</h2>
+<section>
+    <h2 class="h5">Ultimi cicli</h2>
     <div class="table-responsive">
         <table class="table table-sm small">
-            <thead><tr><th>Start</th><th>Order</th><th>Code</th><th>Plan</th><th>Duration</th><th>Outcome</th><th>Note</th></tr></thead>
+            <thead><tr><th>Inizio</th><th>Ordine</th><th>Codice</th><th>Plan</th><th>Durata</th><th>Esito</th><th>Nota</th></tr></thead>
             <tbody>
                 @foreach (var c in _cycles)
                 {
                     <tr>
                         <td>@c.StartedAt.ToLocalTime().ToString("g")</td>
-                        <td>@(c.OrderNumber ?? "one-off")</td>
+                        <td>@(c.OrderId is null ? "servizio" : c.OrderNumber)</td>
                         <td>@c.ProductCode</td>
                         <td><code>@c.PlanName</code></td>
                         <td>@c.Duration.TotalSeconds.ToString("0.0") s</td>
-                        <td><span class="badge @OutcomeClass(c.Outcome)">@c.Outcome</span></td>
+                        <td><span class="badge @OutcomeClass(c.Outcome)">@UiLabels.CycleOutcomeLabel(c.Outcome)</span></td>
                         <td>@c.Message</td>
                     </tr>
                 }
@@ -103,44 +176,51 @@
     </div>
 </section>
 
-<section>
-    <h2 class="h5">Closed orders</h2>
-    <table class="table table-sm small">
-        <thead><tr><th>Order</th><th>Code</th><th>Done</th><th>Status</th><th>Closed by</th><th>When</th></tr></thead>
-        <tbody>
-            @foreach (var o in _closed)
-            {
-                <tr><td>@o.OrderNumber</td><td>@o.ProductCode</td><td>@o.CompletedCount / @o.Quantity</td><td><span class="badge @StatusClass(o.Status)">@o.Status</span></td><td>@o.UpdatedBy</td><td>@o.UpdatedAt.ToLocalTime().ToString("g")</td></tr>
-            }
-        </tbody>
-    </table>
-</section>
-
 @code {
     [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
 
+    /// <summary>Day shown (yyyy-MM-dd); today when missing.</summary>
+    [SupplyParameterFromQuery(Name = "date")] public DateOnly? Date { get; set; }
+
     private PlanningService? _planning;
-    private IReadOnlyList<ProductionOrder> _open = [];
-    private IReadOnlyList<ProductionOrder> _closed = [];
+    private DateOnly _today;
+    private DateOnly _date;
+    private DailyReport _report = DailyReport.Build(default, []);
     private IReadOnlyList<CycleRecord> _cycles = [];
     private int? _confirmCancelId;
+    private bool _confirmCopy;
     private bool _busy;
     private string? _message;
     private bool _messageOk;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loop;
 
-    protected override async Task OnInitializedAsync()
+    private bool HasMissing => _report.Rows.Any(r => r.Row.IsOpen && r.Row.Remaining > 0);
+
+    private string DayLabel =>
+        _date == _today ? "oggi"
+        : _date == _today.AddDays(1) ? "domani"
+        : _date == _today.AddDays(-1) ? "ieri"
+        : _date < _today ? "passato" : "futuro";
+
+    protected override void OnInitialized()
     {
         _planning = Services.GetService<PlanningService>();
-        await LoadAsync();
         _loop = LoopAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _today = WorkDay.Today(Time);
+        _date = Date ?? _today;
+        _confirmCopy = false;
+        _confirmCancelId = null;
+        await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _open = await Planning.ListOpenOrdersAsync(_cts.Token);
-        _closed = await Planning.ListClosedOrdersAsync(50, _cts.Token);
+        _report = DailyReport.Build(_date, await Planning.ListPlanAsync(_date, _cts.Token));
         _cycles = await Planning.ListCyclesAsync(20, _cts.Token);
     }
 
@@ -152,11 +232,24 @@
         {
             while (await timer.WaitForNextTickAsync(_cts.Token))
             {
+                _today = WorkDay.Today(Time);
                 await LoadAsync();
                 await InvokeAsync(StateHasChanged);
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    private void GoTo(DateOnly date)
+    {
+        _message = null;
+        Navigation.NavigateTo(date == _today ? "orders" : $"orders?date={date:yyyy-MM-dd}");
+    }
+
+    private void OnDateChanged(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParseExact(e.Value?.ToString(), "yyyy-MM-dd", out var date))
+            GoTo(date);
     }
 
     private async Task MoveAsync(ProductionOrder order, int direction) =>
@@ -165,7 +258,15 @@
     private async Task CancelAsync(ProductionOrder order)
     {
         _confirmCancelId = null;
-        await Run(user => _planning!.CancelOrderAsync(order.Id, user), $"Order {order.OrderNumber} cancelled.");
+        await Run(user => _planning!.CancelOrderAsync(order.Id, user), $"Ordine {order.Label} annullato.");
+    }
+
+    private async Task CopyMissingAsync()
+    {
+        _confirmCopy = false;
+        var target = _planning!.CopyTargetFor(_date);
+        await Run(user => _planning.CopyMissingAsync(_date, target, user),
+            $"Pezzi mancanti copiati negli ordini del {target:dd/MM/yyyy}.");
     }
 
     private async Task Run(Func<System.Security.Claims.ClaimsPrincipal, Task<EditResult>> action, string? okMessage)
@@ -180,11 +281,24 @@
         finally { _busy = false; }
     }
 
-    private static string StatusClass(OrderStatus status) => status switch
+    private static int Percent(int part, int total) => total <= 0 ? 0 : Math.Min(100, part * 100 / total);
+
+    private static string ProgressLabel(RowProgress progress) => progress switch
     {
-        OrderStatus.Active => "text-bg-primary",
-        OrderStatus.Pending => "text-bg-secondary",
-        OrderStatus.Completed => "text-bg-success",
+        RowProgress.Done => "completata",
+        RowProgress.InProgress => "in corso",
+        RowProgress.Missing => "mancante",
+        RowProgress.Cancelled => "annullata",
+        RowProgress.CarriedOver => "riportata",
+        _ => progress.ToString(),
+    };
+
+    private static string ProgressClass(RowProgress progress) => progress switch
+    {
+        RowProgress.Done => "text-bg-success",
+        RowProgress.InProgress => "text-bg-primary",
+        RowProgress.Missing => "text-bg-secondary",
+        RowProgress.CarriedOver => "text-bg-warning",
         _ => "text-bg-dark",
     };
 

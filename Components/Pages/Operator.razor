@@ -5,15 +5,13 @@
 @inject IPlanningReader Planning
 @inject TimeProvider Time
 
-<PageTitle>Operator</PageTitle>
-
-<h1>Operator</h1>
+<PageTitle>Operatore</PageTitle>
 
 @if (_commands is null)
 {
     <div class="alert alert-info">
         <i class="bi bi-eye" aria-hidden="true"></i>
-        Remote station: jobs are started only from the local operator station.
+        Postazione remota: i lavori si avviano solo dalla postazione operatore locale.
     </div>
 }
 
@@ -21,227 +19,187 @@
     var s = _snapshot;
     var running = s.ActiveCycle is not null;
     var canCommand = _commands is not null && !_busy;
-    // One order in progress at a time: it must be completed or cancelled before another one starts.
-    var activeOrder = _orders.FirstOrDefault(o => o.Status == OrderStatus.Active);
+    var onRobot = _selectedJob is not null && s.AvailablePlans.Contains(_selectedJob.PlanName);
+    var canStart = canCommand && !running && _selectedJob is not null && onRobot && s.State == RobotServiceState.Operational;
+    var repeat = _selectedOrder is { } armed && _commands?.CanRepeatWithoutConfirmation(armed.Id) == true;
 }
 
-<div class="operator-grid">
-    @* ---- Selection: barcode / work list / one-off ---- *@
-    <section class="card">
-        <div class="card-header"><i class="bi bi-upc-scan" aria-hidden="true"></i> Product code</div>
+<div class="operator-layout">
+    @* ---- Zone 1: product code (barcode scanner, keyboard for now) ---- *@
+    <section class="card zone-code">
+        <div class="card-header"><i class="bi bi-upc-scan" aria-hidden="true"></i> Codice prodotto</div>
         <div class="card-body">
             @if (_commands is not null)
             {
-                <form class="mb-2" @onsubmit="OnScanSubmitAsync">
-                    <label class="form-label small text-muted" for="scan">Scan the barcode (or type the code and press Enter)</label>
+                <form class="mb-3" @onsubmit="OnScanSubmitAsync">
+                    <label class="form-label small text-muted" for="scan">Leggi il barcode (oppure scrivi il codice e premi Invio)</label>
                     <input id="scan" class="form-control form-control-lg" autocomplete="off" spellcheck="false"
-                           @ref="_scanInput" @bind="_scanText" @bind:event="oninput"
-                           placeholder="@(running ? "cycle running: scanning disabled" : "waiting for barcode…")" />
+                           @ref="_scanInput" @bind="_scanText" @bind:event="oninput" disabled="@running"
+                           placeholder="@(running ? "ciclo in corso: lettura disattivata" : "in attesa del barcode…")" />
                 </form>
             }
-            @if (_scanMessage is not null)
-            {
-                <div class="small @(_scanOk ? "text-success" : "text-danger")">@_scanMessage</div>
-            }
 
-            @if (_commands is not null)
-            {
-                <div class="input-group input-group-sm mt-3">
-                    <label class="input-group-text" for="manual">One-off job</label>
-                    <select id="manual" class="form-select" @bind="_manualCode">
-                        <option value="">-- choose code --</option>
-                        @foreach (var job in _jobs.Where(j => j.Enabled))
-                        {
-                            var jobOnRobot = s.AvailablePlans.Contains(job.PlanName);
-                            <option value="@job.ProductCode" disabled="@(!jobOnRobot)">@job.ProductCode → @job.PlanName@(jobOnRobot ? "" : " (plan not on robot)")</option>
-                        }
-                    </select>
-                    <button class="btn btn-outline-secondary" disabled="@(running || activeOrder is not null || string.IsNullOrEmpty(_manualCode))" @onclick="SelectManualAsync">Load</button>
-                </div>
-            }
-        </div>
-    </section>
-
-    @* ---- Selected job ---- *@
-    <section class="card">
-        <div class="card-header"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Selected</div>
-        <div class="card-body">
             @if (_selectedJob is null)
             {
-                <p class="text-muted mb-0">@(_selectionError ?? "Nothing selected: scan a code or choose an order.")</p>
+                <p class="text-muted mb-0">@(_selectionMessage ?? "Nessun codice selezionato: leggi un codice degli ordini di oggi.")</p>
             }
             else
             {
                 var job = _selectedJob;
-                var onRobot = s.AvailablePlans.Contains(job.PlanName);
-                <dl class="row mb-2">
+                <div class="selected-code">@job.ProductCode</div>
+                <dl class="row mb-0 mt-2">
                     @if (_selectedOrder is { } order)
                     {
-                        <dt class="col-4">Order</dt><dd class="col-8 fw-semibold">@order.OrderNumber</dd>
-                        <dt class="col-4">Progress</dt><dd class="col-8">@order.CompletedCount / @order.Quantity <span class="text-muted">(remaining @order.Remaining)</span></dd>
+                        @if (order.OrderNumber.Length > 0)
+                        {
+                            <dt class="col-4">N. ordine</dt><dd class="col-8 fw-semibold">@order.OrderNumber</dd>
+                        }
+                        <dt class="col-4">Fatti</dt><dd class="col-8">@order.CompletedCount / @order.Quantity <span class="text-muted">(mancano @order.Remaining)</span></dd>
                         @if (!string.IsNullOrEmpty(order.Notes))
                         {
-                            <dt class="col-4">Notes</dt><dd class="col-8 small">@order.Notes</dd>
+                            <dt class="col-4">Note</dt><dd class="col-8 small">@order.Notes</dd>
                         }
                     }
                     else
                     {
-                        <dt class="col-4">Order</dt><dd class="col-8"><span class="badge text-bg-secondary">one-off</span></dd>
+                        <dt class="col-4">Tipo</dt><dd class="col-8"><span class="badge text-bg-secondary">servizio (non conteggiato)</span></dd>
                     }
-                    <dt class="col-4">Code</dt><dd class="col-8">@job.ProductCode</dd>
                     <dt class="col-4">Plan</dt>
                     <dd class="col-8">
                         <code>@job.PlanName</code>
                         @if (!onRobot)
                         {
-                            <span class="badge text-bg-warning ms-1">not on robot</span>
+                            <span class="badge text-bg-warning ms-1">non presente sul robot</span>
                         }
                     </dd>
-                    <dt class="col-4">Velocity</dt><dd class="col-8">@job.VelocityScale %</dd>
                     @if (!string.IsNullOrEmpty(job.Description))
                     {
-                        <dt class="col-4">Description</dt><dd class="col-8 small">@job.Description</dd>
+                        <dt class="col-4">Descrizione</dt><dd class="col-8 small">@job.Description</dd>
                     }
                 </dl>
-                @if (_commands is not null)
-                {
-                    var repeat = _selectedOrder is { } o && _commands.CanRepeatWithoutConfirmation(o.Id);
-                    <button class="btn btn-lg btn-primary w-100" disabled="@(!canCommand || running || !onRobot || s.State != RobotServiceState.Operational)"
-                            @onclick="StartAsync">
-                        <i class="bi bi-play-circle-fill" aria-hidden="true"></i> @(repeat ? "Start next cycle" : "Start…")
-                    </button>
-                    @if (!onRobot)
-                    {
-                        <div class="small text-danger mt-1">
-                            Plan <code>@job.PlanName</code> is not stored on this robot: start is disabled.
-                            Associate the code with an existing plan on the remote planning station.
-                        </div>
-                    }
-                    @if (s.State != RobotServiceState.Operational && !running)
-                    {
-                        <div class="small text-muted mt-1">Start requires OPERATIONAL (now @RobotStateStyle.Label(s.State)).</div>
-                    }
-                }
-            }
-            @if (_lastResult is not null)
-            {
-                <div class="small mt-2 @(_lastResultOk ? "text-success" : "text-danger")">@_lastResult</div>
             }
         </div>
     </section>
 
-    @* ---- Execution ---- *@
-    <section class="card">
-        <div class="card-header"><i class="bi bi-activity" aria-hidden="true"></i> Execution</div>
+    @* ---- Zone 2: START / STOP ---- *@
+    <section class="card zone-controls">
+        <div class="card-header d-flex align-items-center gap-2">
+            <i class="bi bi-activity" aria-hidden="true"></i> Lavorazione
+            <span class="badge ms-auto @RobotStateStyle.BadgeClass(s.State)">@RobotStateStyle.Label(s.State)</span>
+        </div>
         <div class="card-body">
-            <p class="mb-2">
-                <span class="badge fs-6 @RobotStateStyle.BadgeClass(s.State)">@RobotStateStyle.Label(s.State)</span>
-                <span class="text-muted small ms-2">@s.Status.OperationalStatus · mode @s.Status.Mode</span>
-            </p>
+            @if (_commands is not null)
+            {
+                <div class="control-buttons">
+                    <button class="btn btn-success btn-xl" disabled="@(!canStart)" @onclick="StartAsync">
+                        <i class="bi bi-play-fill" aria-hidden="true"></i> START
+                    </button>
+                    @* Software STOP: highest priority, always enabled. Does NOT replace the hardware emergency stop. *@
+                    <button class="btn btn-danger btn-xl" @onclick="StopAsync">
+                        <i class="bi bi-stop-fill" aria-hidden="true"></i> STOP
+                    </button>
+                </div>
+                <div class="small text-muted mt-2">@StartHint(s, running, onRobot, repeat)</div>
+            }
+
             @if (s.ActiveCycle is { } cycle)
             {
-                <dl class="row mb-2">
-                    <dt class="col-4">Order</dt><dd class="col-8">@(cycle.OrderNumber ?? "one-off")</dd>
-                    <dt class="col-4">Code</dt><dd class="col-8">@cycle.ProductCode</dd>
-                    <dt class="col-4">Plan</dt><dd class="col-8"><code>@cycle.PlanName</code> @@ @cycle.VelocityScale %</dd>
-                    <dt class="col-4">Node</dt><dd class="col-8">@(string.IsNullOrEmpty(s.Plan?.NodeName) ? "-" : s.Plan.NodeName)</dd>
-                    <dt class="col-4">Elapsed</dt><dd class="col-8">@((Time.GetUtcNow() - cycle.StartedAt).TotalSeconds.ToString("0.0")) s</dd>
-                </dl>
+                <div class="alert alert-primary py-2 mt-3 mb-0">
+                    In esecuzione <b>@cycle.ProductCode</b> · <code>@cycle.PlanName</code>
+                    · @((Time.GetUtcNow() - cycle.StartedAt).TotalSeconds.ToString("0")) s
+                    @if (!string.IsNullOrEmpty(s.Plan?.NodeName))
+                    {
+                        <span class="text-muted"> · @s.Plan.NodeName</span>
+                    }
+                </div>
             }
             else if (s.LastCycle is { } last)
             {
-                <div class="alert @(last.Outcome == CycleOutcome.Completed ? "alert-success" : "alert-warning") py-2 small">
-                    Last cycle @last.Outcome: <code>@last.PlanName</code> (@(last.OrderNumber ?? "one-off")), @last.Duration.TotalSeconds.ToString("0.0") s
+                <div class="alert @(last.Outcome == CycleOutcome.Completed ? "alert-success" : "alert-warning") py-2 mt-3 mb-0 small">
+                    Ultimo ciclo @UiLabels.CycleOutcomeLabel(last.Outcome): <b>@last.ProductCode</b>, @last.Duration.TotalSeconds.ToString("0") s
                     @if (last.Message is not null)
                     {
                         <span> - @last.Message</span>
                     }
                     @if (last.Outcome != CycleOutcome.Completed)
                     {
-                        <div>Not counted. Fix the cause, then press Start again.</div>
+                        <div>Non conteggiato. Elimina la causa, poi premi di nuovo START.</div>
                     }
                 </div>
             }
-            <p class="small text-muted mb-2">Cycles completed since start: @s.CompletedCycles</p>
-            @if (_commands is not null)
+            @if (_lastResult is not null)
             {
-                <div class="d-flex flex-wrap gap-2 align-items-center">
-                    <button class="btn btn-outline-warning" disabled="@(!canCommand || !Allowed(new PausePlanCommand()))"
-                            @onclick="() => Run(c => c.PausePlanAsync(Source))">
-                        <i class="bi bi-pause-fill" aria-hidden="true"></i> Pause
-                    </button>
-                    <button class="btn btn-outline-primary" disabled="@(!canCommand || !Allowed(new ResumePlanCommand()))"
-                            @onclick="RequestResume">
-                        <i class="bi bi-play-fill" aria-hidden="true"></i> Resume…
-                    </button>
-                    <button class="btn btn-outline-danger" disabled="@(!canCommand || !Allowed(new StopPlanCommand()))"
-                            @onclick="() => Run(c => c.StopPlanAsync(Source))">
-                        <i class="bi bi-skip-end-fill" aria-hidden="true"></i> Stop
-                    </button>
-                    <StopButton Source="operator-page" />
-                </div>
-                <hr />
-                <div class="d-flex flex-wrap gap-2">
-                    <button class="btn btn-sm btn-outline-secondary" disabled="@(!canCommand || !Allowed(new ConnectCommand()))"
-                            @onclick="() => Run(c => c.ConnectAsync(Source))">
-                        <i class="bi bi-plug" aria-hidden="true"></i> Connect
-                    </button>
-                    <button class="btn btn-sm btn-outline-success" disabled="@(!canCommand || !Allowed(new EnableCommand()))"
-                            @onclick="() => Run(c => c.EnableAsync(Source))">
-                        <i class="bi bi-power" aria-hidden="true"></i> Enable
-                    </button>
-                    <button class="btn btn-sm btn-outline-warning" disabled="@(!canCommand || !Allowed(new ClearFaultCommand()))"
-                            @onclick="() => Run(c => c.ClearFaultAsync(Source))">
-                        <i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Clear fault
-                    </button>
-                </div>
+                <div class="small mt-2 @(_lastResultOk ? "text-success" : "text-danger")">@_lastResult</div>
             }
             @if (s.LastError is not null)
             {
                 <div class="alert alert-warning py-1 small mt-2 mb-0">@s.LastError</div>
             }
+
+            @if (_commands is not null)
+            {
+                @* Robot service: needed after power-on or a fault, not during normal work. *@
+                <div class="d-flex flex-wrap gap-2 mt-3 pt-3 border-top">
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@(!canCommand || !Allowed(new ConnectCommand()))"
+                            @onclick="() => Run(c => c.ConnectAsync(Source))">
+                        <i class="bi bi-plug" aria-hidden="true"></i> Connetti
+                    </button>
+                    <button class="btn btn-sm btn-outline-success" disabled="@(!canCommand || !Allowed(new EnableCommand()))"
+                            @onclick="() => Run(c => c.EnableAsync(Source))">
+                        <i class="bi bi-power" aria-hidden="true"></i> Abilita
+                    </button>
+                    <button class="btn btn-sm btn-outline-warning" disabled="@(!canCommand || !Allowed(new ClearFaultCommand()))"
+                            @onclick="() => Run(c => c.ClearFaultAsync(Source))">
+                        <i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Reset anomalia
+                    </button>
+                    <span class="small text-muted ms-auto align-self-center">Cicli dall'avvio: @s.CompletedCycles</span>
+                </div>
+            }
         </div>
     </section>
 
-    @* ---- Work list ---- *@
-    <section class="card worklist">
-        <div class="card-header"><i class="bi bi-list-ol" aria-hidden="true"></i> Work list</div>
+    @* ---- Zone 3: today's work plan, done and to do (read-only) ---- *@
+    <section class="card zone-plan">
+        <div class="card-header d-flex">
+            <span><i class="bi bi-list-ol" aria-hidden="true"></i> Ordini di produzione di oggi (@_today.ToString("dd/MM/yyyy"))</span>
+            @if (_orders.Count > 0)
+            {
+                <span class="ms-auto small">
+                    fatti @_orders.Sum(o => Math.Min(o.CompletedCount, o.Quantity)) / @_orders.Sum(o => o.Quantity) pezzi
+                </span>
+            }
+        </div>
         <div class="table-responsive">
             <table class="table table-sm align-middle mb-0">
-                <thead><tr><th>#</th><th>Order</th><th>Code</th><th>Done</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Codice</th><th>N. ordine</th><th>Fatti</th><th>Stato</th></tr></thead>
                 <tbody>
                     @for (var i = 0; i < _orders.Count; i++)
                     {
                         var o = _orders[i];
                         var selected = _selectedOrder?.Id == o.Id;
-                        <tr class="@(selected ? "table-active" : "")">
+                        <tr class="@(selected ? "table-active" : "") @(o.IsOpen ? "" : "text-muted")">
                             <td>@(i + 1)</td>
-                            <td class="fw-semibold">@o.OrderNumber @if (i == 0) {<span class="badge text-bg-info ms-1">current</span>}</td>
-                            <td>
+                            <td class="fw-semibold">
                                 @o.ProductCode
+                                @if (selected)
+                                {
+                                    <i class="bi bi-caret-left-fill text-primary ms-1" title="Selezionato" aria-hidden="true"></i>
+                                }
                                 @{
                                     var orderJob = _jobs.FirstOrDefault(j => j.ProductCode == o.ProductCode);
                                 }
-                                @if (orderJob is null)
+                                @if (o.IsOpen && orderJob is null)
                                 {
-                                    <span class="badge text-bg-danger ms-1">no job</span>
+                                    <span class="badge text-bg-danger ms-1">codice non configurato</span>
                                 }
-                                else if (!s.AvailablePlans.Contains(orderJob.PlanName))
+                                else if (o.IsOpen && !s.AvailablePlans.Contains(orderJob!.PlanName))
                                 {
-                                    <span class="badge text-bg-warning ms-1" title="Plan @orderJob.PlanName is not stored on the robot">plan not on robot</span>
+                                    <span class="badge text-bg-warning ms-1" title="Il plan @(orderJob!.PlanName) non è salvato sul robot">plan non presente sul robot</span>
                                 }
                             </td>
+                            <td>@o.OrderNumber</td>
                             <td>@o.CompletedCount / @o.Quantity</td>
-                            <td>@o.Status</td>
-                            <td class="text-end">
-                                @if (_commands is not null && !selected)
-                                {
-                                    var blocked = activeOrder is not null && activeOrder.Id != o.Id;
-                                    <button class="btn btn-sm btn-outline-primary" disabled="@(running || blocked)"
-                                            title="@(blocked ? $"Order {activeOrder!.OrderNumber} is in progress" : null)"
-                                            @onclick="() => SelectOrderAsync(o)">Select</button>
-                                }
-                            </td>
+                            <td><span class="badge @StatusClass(o.Status)">@StatusLabel(o.Status)</span></td>
                         </tr>
                     }
                 </tbody>
@@ -249,14 +207,33 @@
         </div>
         @if (_orders.Count == 0)
         {
-            <p class="text-muted small m-2">No open orders. Scan a code to run a one-off job.</p>
-        }
-        else if (activeOrder is not null)
-        {
-            <p class="text-muted small m-2">Order @activeOrder.OrderNumber is in progress: other orders and one-off jobs can start once it is completed or cancelled.</p>
+            <p class="text-muted small m-2">Nessun ordine di produzione per oggi. Gli ordini si impostano dalla postazione remota di pianificazione.</p>
         }
     </section>
 </div>
+
+@* ---- Warning popup: scanned code not accepted ---- *@
+@if (_scanWarning is not null)
+{
+    <div class="modal d-block" tabindex="-1" role="alertdialog" aria-modal="true" aria-labelledby="scan-title">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-danger">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="scan-title">
+                        <i class="bi bi-exclamation-octagon-fill text-danger" aria-hidden="true"></i> Codice non accettato
+                    </h5>
+                </div>
+                <div class="modal-body">
+                    <p class="fs-5 mb-0">@_scanWarning</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary btn-lg" @ref="_warningOk" @onclick="CloseScanWarning">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+}
 
 @* ---- Motion confirmation dialog (in-page, no JS confirm()) ---- *@
 @if (_pending is not null)
@@ -268,23 +245,23 @@
             <div class="modal-content border-warning">
                 <div class="modal-header">
                     <h5 class="modal-title" id="confirm-title">
-                        <i class="bi bi-exclamation-triangle-fill text-warning" aria-hidden="true"></i> Confirm robot motion
+                        <i class="bi bi-exclamation-triangle-fill text-warning" aria-hidden="true"></i> Conferma movimento del robot
                     </h5>
                 </div>
                 <div class="modal-body">
                     <p class="fw-semibold">@_pending.Summary</p>
-                    <p class="small mb-1">The robot will move. Check that the work cell is clear and the hardware emergency stop is within reach.</p>
+                    <p class="small mb-1">Il robot si muoverà. Verifica che la cella di lavoro sia libera e che il pulsante di emergenza fisico sia a portata di mano.</p>
                     <p class="small text-muted mb-0">
-                        @(expired ? "Confirmation expired: close and request again." : $"Expires in {Math.Ceiling(remaining.TotalSeconds):0} s.")
+                        @(expired ? "Conferma scaduta: chiudi e richiedi di nuovo." : $"Scade tra {Math.Ceiling(remaining.TotalSeconds):0} s.")
                     </p>
                 </div>
                 <div class="modal-footer justify-content-between">
                     @* STOP stays reachable while the dialog covers the page. *@
                     <StopButton Source="operator-confirm-dialog" />
                     <div class="d-flex gap-2">
-                        <button class="btn btn-secondary" @onclick="CancelPending">Cancel</button>
+                        <button class="btn btn-secondary" @onclick="CancelPending">Annulla</button>
                         <button class="btn btn-warning" disabled="@(expired || _busy)" @onclick="ConfirmPending">
-                            <i class="bi bi-play-fill" aria-hidden="true"></i> Confirm and move
+                            <i class="bi bi-play-fill" aria-hidden="true"></i> Conferma e muovi
                         </button>
                     </div>
                 </div>
@@ -301,22 +278,23 @@
     private RobotCommandService? _commands;
     private ScanService? _scanner;
     private RobotSnapshot _snapshot = RobotSnapshot.Initial;
-    private IReadOnlyList<ProductionOrder> _orders = [];
+    private DateOnly _today;
+    private IReadOnlyList<ProductionOrder> _orders = []; // today's orders, done or to do
     private IReadOnlyList<Job> _jobs = [];
 
-    // Selection: explicit order, explicit one-off code, or (default) the current order.
-    private int? _explicitOrderId;
-    private string? _oneOffCode;
+    // Selection comes only from a scanned (or typed) code: a plan row, or a service job (e.g. HOME).
+    private int? _selectedOrderId;
+    private string? _serviceCode;
     private ProductionOrder? _selectedOrder;
     private Job? _selectedJob;
-    private string? _selectionError;
+    private string? _selectionMessage;
 
     private ElementReference _scanInput;
+    private ElementReference _warningOk;
     private string _scanText = "";
-    private string? _scanMessage;
-    private bool _scanOk;
+    private string? _scanWarning;
     private bool _focusScan = true;
-    private string _manualCode = "";
+    private bool _focusWarning;
 
     private ConfirmationRequest? _pending;
     private bool _busy;
@@ -337,13 +315,22 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // Keyboard-wedge scanners type into the focused field: keep the scan box focused when idle.
-        if (_focusScan && _commands is not null && _pending is null)
+        try
         {
-            _focusScan = false;
-            try { await _scanInput.FocusAsync(); }
-            catch (Exception) { /* element not rendered yet */ }
+            // The warning popup takes the focus, so the next Enter of the scanner (or keyboard) closes it.
+            if (_focusWarning && _scanWarning is not null)
+            {
+                _focusWarning = false;
+                await _warningOk.FocusAsync();
+            }
+            // Keyboard-wedge scanners type into the focused field: keep the scan box focused when idle.
+            else if (_focusScan && _commands is not null && _pending is null && _scanWarning is null)
+            {
+                _focusScan = false;
+                await _scanInput.FocusAsync();
+            }
         }
+        catch (Exception) { /* element not rendered yet */ }
     }
 
     private async Task RefreshLoopAsync()
@@ -363,7 +350,7 @@
                     await LoadPlanningAsync();
                     _focusScan |= cycleEnded;
                 }
-                if (changed || _pending is not null)
+                if (changed || _pending is not null || cycleEnded)
                     await InvokeAsync(StateHasChanged);
             }
         }
@@ -372,39 +359,53 @@
 
     private async Task LoadPlanningAsync()
     {
-        _orders = await Planning.ListOpenOrdersAsync(_cts.Token);
+        _today = WorkDay.Today(Time);
+        // Only today's work, done or to do: cancelled orders and orders moved to another day stay visible
+        // on the planning station only.
+        _orders = (await Planning.ListPlanAsync(_today, _cts.Token))
+            .Where(o => o.Status is OrderStatus.Pending or OrderStatus.Active or OrderStatus.Completed)
+            .ToList();
         _jobs = await Planning.ListJobsAsync(_cts.Token);
-        await ResolveSelectionAsync();
+        ResolveSelection();
     }
 
-    /// <summary>Re-reads the selected order and its job (both may have been edited remotely).</summary>
-    private async Task ResolveSelectionAsync()
+    /// <summary>Re-reads the selected row and its job (both may have been edited remotely or completed).</summary>
+    private void ResolveSelection()
     {
-        _selectionError = null;
-        // One order in progress at a time: while it is Active it is always the selection.
-        if (_orders.FirstOrDefault(o => o.Status == OrderStatus.Active) is { } active)
-            (_explicitOrderId, _oneOffCode) = (active.Id, null);
-        if (_oneOffCode is { } code)
+        if (_serviceCode is { } code)
         {
             _selectedOrder = null;
-            _selectedJob = _jobs.FirstOrDefault(j => j.ProductCode == code && j.Enabled);
+            _selectedJob = _jobs.FirstOrDefault(j => j.ProductCode == code && j.Enabled && j.IsService);
             if (_selectedJob is null)
-                (_oneOffCode, _selectionError) = (null, $"Job '{code}' is no longer available.");
+                (_serviceCode, _selectionMessage) = (null, $"Il codice '{code}' non è più disponibile: leggilo di nuovo.");
+            return;
+        }
+        if (_selectedOrderId is not { } id)
+        {
+            (_selectedOrder, _selectedJob) = (null, null);
             return;
         }
 
-        var order = _explicitOrderId is { } id ? _orders.FirstOrDefault(o => o.Id == id) : null;
-        if (order is null)
+        var row = _orders.FirstOrDefault(o => o.Id == id);
+        if (row is not { IsOpen: true })
         {
-            _explicitOrderId = null; // completed/cancelled meanwhile: fall back to the current order
-            order = _orders.FirstOrDefault();
+            // Row completed (or cancelled): move to the next open row of the same code, if any.
+            var rowCode = row?.ProductCode ?? _selectedOrder?.ProductCode;
+            row = _orders.FirstOrDefault(o => o.IsOpen && o.ProductCode == rowCode);
+            if (row is null)
+            {
+                (_selectedOrderId, _selectedOrder, _selectedJob) = (null, null, null);
+                _selectionMessage = rowCode is null ? null : $"'{rowCode}' completato per oggi: leggi il codice successivo.";
+                return;
+            }
+            _selectedOrderId = row.Id;
         }
-        _selectedOrder = order;
-        _selectedJob = order is null ? null : _jobs.FirstOrDefault(j => j.ProductCode == order.ProductCode);
-        if (order is not null && _selectedJob is not { Enabled: true })
+        _selectedOrder = row;
+        _selectedJob = _jobs.FirstOrDefault(j => j.ProductCode == row.ProductCode && j.Enabled);
+        if (_selectedJob is null)
         {
-            _selectionError = $"Order {order.OrderNumber}: job '{order.ProductCode}' is missing or disabled.";
-            _selectedJob = null;
+            (_selectedOrderId, _selectedOrder) = (null, null);
+            _selectionMessage = $"Il codice '{row.ProductCode}' manca o non è attivo: chiedi alla pianificazione.";
         }
     }
 
@@ -418,50 +419,42 @@
         if (_snapshot.ActiveCycle is not null || _pending is not null)
         {
             _scanner.LogIgnored(raw, "a cycle is running or awaiting confirmation", Source);
-            (_scanOk, _scanMessage) = (false, "Ignored: a cycle is running.");
+            ShowScanWarning("C'è un ciclo in corso: il codice è stato ignorato.");
             return;
         }
 
         var result = await _scanner.ResolveAsync(raw, Source);
         if (!result.IsValid)
         {
-            (_scanOk, _scanMessage) = (false, result.Error);
+            ShowScanWarning(result.Error!);
             return;
         }
-        if (result.Order is { } order)
-        {
-            (_explicitOrderId, _oneOffCode) = (order.Id, null);
-            (_scanOk, _scanMessage) = (true, $"'{result.Code}': order {order.OrderNumber} selected.");
-        }
-        else
-        {
-            (_explicitOrderId, _oneOffCode) = (null, result.Code);
-            (_scanOk, _scanMessage) = (true, $"'{result.Code}': no open order, one-off job loaded.");
-        }
+        (_selectedOrderId, _serviceCode, _selectionMessage) = (result.Order?.Id, result.Order is null ? result.Code : null, null);
+        _lastResult = null;
         await LoadPlanningAsync();
     }
 
-    private async Task SelectOrderAsync(ProductionOrder order)
+    private void ShowScanWarning(string message)
     {
-        (_explicitOrderId, _oneOffCode, _scanMessage) = (order.Id, null, null);
-        _focusScan = true;
-        await ResolveSelectionAsync();
+        _scanWarning = message;
+        _focusWarning = true;
     }
 
-    private async Task SelectManualAsync()
+    private void CloseScanWarning()
     {
-        if (_scanner is null || string.IsNullOrEmpty(_manualCode)) return;
-        var result = await _scanner.ResolveAsync(_manualCode, Source + "/manual");
-        if (result.IsValid)
-            (_explicitOrderId, _oneOffCode, _scanOk, _scanMessage) = (null, result.Code, true, $"'{result.Code}': one-off job loaded.");
-        else
-            (_scanOk, _scanMessage) = (false, result.Error);
-        _manualCode = "";
+        _scanWarning = null;
         _focusScan = true;
-        await ResolveSelectionAsync();
     }
 
     private bool Allowed(RobotCommand command) => CommandPolicy.Check(_snapshot.State, command) is null;
+
+    private string StartHint(RobotSnapshot s, bool running, bool onRobot, bool repeat) =>
+        running ? "Lavorazione in corso. STOP ferma subito il robot."
+        : _selectedJob is null ? "Leggi un codice per abilitare START."
+        : !onRobot ? $"Il plan {_selectedJob.PlanName} non è salvato su questo robot: START è disattivato."
+        : s.State != RobotServiceState.Operational ? $"START richiede lo stato PRONTO (ora {RobotStateStyle.Label(s.State)})."
+        : repeat ? $"Pronto: START esegue il prossimo pezzo di {_selectedJob.ProductCode}."
+        : "Pronto: START chiede conferma prima del primo pezzo.";
 
     private async Task StartAsync()
     {
@@ -487,14 +480,12 @@
         }
     }
 
-    private void RequestResume()
+    private async Task StopAsync()
     {
         if (_commands is null) return;
-        var request = _commands.RequestResume(Source);
-        if (request.IsAccepted)
-            _pending = request;
-        else
-            Show(CommandResult.Rejected(request.Rejection!));
+        // Not gated by _busy: STOP must never wait for another command of this page.
+        Show(await _commands.StopAsync(Source));
+        _focusScan = true;
     }
 
     private async Task Run(Func<RobotCommandService, Task<CommandResult>> action)
@@ -536,8 +527,25 @@
     private void Show(CommandResult result)
     {
         _lastResultOk = result.IsSuccess;
-        _lastResult = result.IsSuccess ? "Command accepted." : $"{result.Outcome}: {result.Message}";
+        _lastResult = result.IsSuccess ? "Comando accettato." : $"Comando non eseguito ({Labels.Of(result.Outcome)}): {result.Message}";
     }
+
+    private static string StatusLabel(OrderStatus status) => status switch
+    {
+        OrderStatus.Pending => "Da fare",
+        OrderStatus.Active => "In corso",
+        OrderStatus.Completed => "Fatto",
+        OrderStatus.Cancelled => "Annullato",
+        _ => "Spostato a un altro giorno",
+    };
+
+    private static string StatusClass(OrderStatus status) => status switch
+    {
+        OrderStatus.Pending => "text-bg-secondary",
+        OrderStatus.Active => "text-bg-primary",
+        OrderStatus.Completed => "text-bg-success",
+        _ => "text-bg-dark",
+    };
 
     public async ValueTask DisposeAsync()
     {

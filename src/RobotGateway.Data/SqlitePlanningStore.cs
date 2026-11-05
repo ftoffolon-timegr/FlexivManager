@@ -5,10 +5,10 @@ using RobotGateway.Core;
 namespace RobotGateway.Data;
 
 /// <summary>
-/// SQLite persistence of jobs, orders and cycle history. Writes are serialized (single writer):
+/// SQLite persistence of jobs, daily plan rows and cycle history. Writes are serialized (single writer):
 /// SQLite allows one writer anyway, and it keeps uniqueness and position checks race-free.
 /// </summary>
-public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> factory, TimeProvider time) : IPlanningStore
+public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> factory, TimeProvider time) : IPlanningStore, IErpStore
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
     private readonly SemaphoreSlim _write = new(1, 1);
@@ -18,7 +18,75 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         using var db = factory.CreateDbContext();
         db.Database.EnsureCreated();
+        DropObsoleteColumns(db);
+        AddDailyPlanColumns(db);
+        AddArticlesTable(db);
     }
+
+    /// <summary>
+    /// ERP article codes (2026-11-05). EnsureCreated does not touch an existing database, so the table is added
+    /// here; same layout EF would create for <see cref="ArticleEntity"/>.
+    /// </summary>
+    private static void AddArticlesTable(PlanningDbContext db)
+    {
+        db.Database.ExecuteSqlRaw("""
+            CREATE TABLE IF NOT EXISTS "Articles" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_Articles" PRIMARY KEY AUTOINCREMENT,
+                "Code" TEXT NOT NULL,
+                "RawCode" TEXT NOT NULL,
+                "FirstImportedAt" TEXT NOT NULL,
+                "LastImportedAt" TEXT NOT NULL,
+                "SourceFile" TEXT NOT NULL
+            )
+            """);
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_Articles_Code\" ON \"Articles\" (\"Code\")");
+    }
+
+    /// <summary>
+    /// Databases created before the daily work plan (2026-10-30) lack these columns. Existing rows are put
+    /// in the plan of the day they were created.
+    /// </summary>
+    private static void AddDailyPlanColumns(PlanningDbContext db)
+    {
+        AddColumn(db, "Jobs", "IsService", "INTEGER NOT NULL DEFAULT 0");
+        if (AddColumn(db, "Orders", "WorkDate", "TEXT NOT NULL DEFAULT '0001-01-01'"))
+            db.Database.ExecuteSqlRaw("UPDATE \"Orders\" SET \"WorkDate\" = substr(\"CreatedAt\", 1, 10)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_Orders_WorkDate_Position\" ON \"Orders\" (\"WorkDate\", \"Position\")");
+    }
+
+    /// <returns>True when the column was missing and has been added.</returns>
+    private static bool AddColumn(PlanningDbContext db, string table, string column, string definition)
+    {
+        if (HasColumn(db, table, column))
+            return false;
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"" + table + "\" ADD COLUMN \"" + column + "\" " + definition);
+        return true;
+    }
+
+    /// <summary>
+    /// Columns of older databases that the model no longer has (SQLite supports DROP COLUMN since 3.35):
+    /// VelocityScale (removed 2026-10-30, NOT NULL: every insert would fail) and the quality check of the
+    /// pieces (OK / KO / Rework, removed 2026-11-03).
+    /// </summary>
+    private static void DropObsoleteColumns(PlanningDbContext db)
+    {
+        DropColumn(db, "Jobs", "VelocityScale");
+        DropColumn(db, "Cycles", "VelocityScale");
+        foreach (var column in new[] { "OkCount", "KoCount", "ReworkCount" })
+            DropColumn(db, "Orders", column);
+        foreach (var column in new[] { "Quality", "QualityNote", "QualityAt", "QualityBy" })
+            DropColumn(db, "Cycles", column);
+    }
+
+    private static void DropColumn(PlanningDbContext db, string table, string column)
+    {
+        if (HasColumn(db, table, column))
+            db.Database.ExecuteSqlRaw("ALTER TABLE \"" + table + "\" DROP COLUMN \"" + column + "\"");
+    }
+
+    private static bool HasColumn(PlanningDbContext db, string table, string column) =>
+        db.Database.SqlQuery<int>($"SELECT COUNT(*) AS \"Value\" FROM pragma_table_info({table}) WHERE name = {column}")
+            .AsEnumerable().Single() > 0;
 
     // ---- Reads -------------------------------------------------------------------------------
 
@@ -58,18 +126,25 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
             .Where(o => o.Status == OrderStatus.Pending || o.Status == OrderStatus.Active)
             .ToListAsync(ct);
         return rows
-            .OrderBy(o => o.Status == OrderStatus.Active ? 0 : 1)
+            .OrderBy(o => o.WorkDate)
             .ThenBy(o => o.Position)
             .ThenBy(o => o.Id)
             .Select(ToOrder)
             .ToList();
     }
 
+    public async Task<IReadOnlyList<ProductionOrder>> ListPlanAsync(DateOnly date, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var rows = await db.Orders.AsNoTracking().Where(o => o.WorkDate == date).ToListAsync(ct);
+        return rows.OrderBy(o => o.Position).ThenBy(o => o.Id).Select(ToOrder).ToList();
+    }
+
     public async Task<IReadOnlyList<ProductionOrder>> ListClosedOrdersAsync(int max, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var rows = await db.Orders.AsNoTracking()
-            .Where(o => o.Status == OrderStatus.Completed || o.Status == OrderStatus.Cancelled)
+            .Where(o => o.Status == OrderStatus.Completed || o.Status == OrderStatus.Cancelled || o.Status == OrderStatus.CarriedOver)
             .OrderByDescending(o => o.Id)
             .Take(max)
             .ToListAsync(ct);
@@ -87,8 +162,14 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var rows = await db.Cycles.AsNoTracking().OrderByDescending(c => c.Id).Take(max).ToListAsync(ct);
-        return rows.Select(c => new CycleRecord(c.ProductCode, c.PlanName, c.VelocityScale, c.OrderId, c.OrderNumber, c.Source,
-            c.StartedAt, TimeSpan.FromSeconds(c.DurationSeconds), c.Outcome, c.Message) { Id = c.Id }).ToList();
+        return rows.Select(ToCycle).ToList();
+    }
+
+    public async Task<CycleRecord?> GetCycleAsync(long id, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var row = await db.Cycles.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id, ct);
+        return row is null ? null : ToCycle(row);
     }
 
     // ---- Jobs --------------------------------------------------------------------------------
@@ -96,7 +177,7 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     public Task<Job> CreateJobAsync(JobDraft draft, string user, CancellationToken ct = default) => Write(async db =>
     {
         if (await db.Jobs.AnyAsync(j => j.ProductCode == draft.ProductCode, ct))
-            throw new PlanningConflictException($"Product code '{draft.ProductCode}' already has a job.");
+            throw new PlanningConflictException($"Il codice '{draft.ProductCode}' esiste già.");
         var now = time.GetUtcNow();
         var row = new JobEntity { CreatedAt = now, Version = 1 };
         Apply(row, draft, user, now);
@@ -110,13 +191,13 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     public Task<Job> UpdateJobAsync(int id, int expectedVersion, JobDraft draft, string user, CancellationToken ct = default) => Write(async db =>
     {
         var row = await db.Jobs.FirstOrDefaultAsync(j => j.Id == id, ct)
-            ?? throw new PlanningConflictException("The job was deleted in the meantime.");
+            ?? throw new PlanningConflictException("Il codice è stato eliminato nel frattempo.");
         if (row.Version != expectedVersion)
-            throw new PlanningConflictException($"The job was changed by {row.UpdatedBy} in the meantime: reload and retry.");
+            throw new PlanningConflictException($"Il codice è stato modificato da {row.UpdatedBy} nel frattempo: ricarica e riprova.");
         if (await db.Jobs.AnyAsync(j => j.Id != id && j.ProductCode == draft.ProductCode, ct))
-            throw new PlanningConflictException($"Product code '{draft.ProductCode}' already has a job.");
+            throw new PlanningConflictException($"Il codice '{draft.ProductCode}' esiste già.");
         if (row.ProductCode != draft.ProductCode && await HasOpenOrders(db, row.ProductCode, ct))
-            throw new PlanningConflictException($"Open orders use code '{row.ProductCode}': it cannot be renamed.");
+            throw new PlanningConflictException($"Ci sono ordini aperti con il codice '{row.ProductCode}': non si può rinominare.");
 
         Apply(row, draft, user, time.GetUtcNow());
         row.Version++;
@@ -129,11 +210,11 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     public Task DeleteJobAsync(int id, int expectedVersion, string user, CancellationToken ct = default) => Write(async db =>
     {
         var row = await db.Jobs.FirstOrDefaultAsync(j => j.Id == id, ct)
-            ?? throw new PlanningConflictException("The job was already deleted.");
+            ?? throw new PlanningConflictException("Il codice era già stato eliminato.");
         if (row.Version != expectedVersion)
-            throw new PlanningConflictException($"The job was changed by {row.UpdatedBy} in the meantime: reload and retry.");
+            throw new PlanningConflictException($"Il codice è stato modificato da {row.UpdatedBy} nel frattempo: ricarica e riprova.");
         if (await HasOpenOrders(db, row.ProductCode, ct))
-            throw new PlanningConflictException($"Open orders use code '{row.ProductCode}': cancel them first.");
+            throw new PlanningConflictException($"Ci sono ordini aperti con il codice '{row.ProductCode}': annullali prima.");
         var job = ToJob(row);
         db.Jobs.Remove(row);
         await SaveConcurrent(db, ct);
@@ -147,15 +228,16 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         await EnsureOrderNumberFree(db, draft.OrderNumber, exceptId: null, ct);
         var now = time.GetUtcNow();
-        var lastPosition = await db.Orders.MaxAsync(o => (int?)o.Position, ct) ?? 0;
+        var date = draft.WorkDate ?? WorkDay.Today(time);
         var row = new OrderEntity
         {
+            WorkDate = date,
             OrderNumber = draft.OrderNumber,
             ProductCode = draft.ProductCode,
             Quantity = draft.Quantity,
             Notes = draft.Notes,
             Status = OrderStatus.Pending,
-            Position = lastPosition + 1,
+            Position = await NextPosition(db, date, ct),
             Version = 1,
             CreatedAt = now,
             CreatedBy = user,
@@ -171,11 +253,17 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         var row = await LoadOrder(db, id, ct);
         if (row.Version != expectedVersion)
-            throw new PlanningConflictException($"The order was changed by {row.UpdatedBy} in the meantime: reload and retry.");
+            throw new PlanningConflictException($"L'ordine è stato modificato da {row.UpdatedBy} nel frattempo: ricarica e riprova.");
         if (row.Status != OrderStatus.Pending)
-            throw new PlanningConflictException($"Order {row.OrderNumber} is {row.Status}: only pending orders can be edited.");
+            throw new PlanningConflictException($"L'ordine {Label(row)} è {Labels.Of(row.Status)}: si possono modificare solo gli ordini da iniziare.");
         await EnsureOrderNumberFree(db, draft.OrderNumber, exceptId: id, ct);
 
+        var date = draft.WorkDate ?? row.WorkDate;
+        if (date != row.WorkDate)
+        {
+            row.Position = await NextPosition(db, date, ct);
+            row.WorkDate = date;
+        }
         row.OrderNumber = draft.OrderNumber;
         row.ProductCode = draft.ProductCode;
         row.Quantity = draft.Quantity;
@@ -189,8 +277,8 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         var row = await LoadOrder(db, id, ct);
         if (row.Status != OrderStatus.Pending)
-            throw new PlanningConflictException($"Order {row.OrderNumber} is {row.Status}: only pending orders can be moved.");
-        var pending = db.Orders.Where(o => o.Status == OrderStatus.Pending && o.Id != id);
+            throw new PlanningConflictException($"L'ordine {Label(row)} è {Labels.Of(row.Status)}: si possono spostare solo gli ordini da iniziare.");
+        var pending = db.Orders.Where(o => o.WorkDate == row.WorkDate && o.Status == OrderStatus.Pending && o.Id != id);
         var neighbour = direction < 0
             ? await pending.Where(o => o.Position < row.Position).OrderByDescending(o => o.Position).FirstOrDefaultAsync(ct)
             : await pending.Where(o => o.Position > row.Position).OrderBy(o => o.Position).FirstOrDefaultAsync(ct);
@@ -207,7 +295,7 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         var row = await LoadOrder(db, id, ct);
         if (row.Status is not (OrderStatus.Pending or OrderStatus.Active))
-            throw new PlanningConflictException($"Order {row.OrderNumber} is already {row.Status}.");
+            throw new PlanningConflictException($"L'ordine {Label(row)} è già {Labels.Of(row.Status)}.");
         row.Status = OrderStatus.Cancelled;
         Touch(row, user);
         await SaveConcurrent(db, ct);
@@ -219,10 +307,6 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
         var row = await db.Orders.FirstOrDefaultAsync(o => o.Id == id, ct);
         if (row is { Status: OrderStatus.Pending })
         {
-            // Backstop for the one-order-in-progress rule (also checked before every start).
-            var other = await db.Orders.FirstOrDefaultAsync(o => o.Status == OrderStatus.Active && o.Id != id, ct);
-            if (other is not null)
-                throw new PlanningConflictException($"Order {other.OrderNumber} is already in progress: {row.OrderNumber} cannot become active.");
             row.Status = OrderStatus.Active;
             Touch(row, user);
             await SaveConcurrent(db, ct);
@@ -238,7 +322,6 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
             OrderNumber = cycle.OrderNumber,
             ProductCode = cycle.ProductCode,
             PlanName = cycle.PlanName,
-            VelocityScale = cycle.VelocityScale,
             Source = cycle.Source,
             StartedAt = cycle.StartedAt,
             DurationSeconds = cycle.Duration.TotalSeconds,
@@ -252,10 +335,9 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
             order = await db.Orders.FirstOrDefaultAsync(o => o.Id == orderId, ct);
             if (order is not null && cycle.Outcome == CycleOutcome.Completed)
             {
-                // A cancelled order keeps its status; the cycle that was already running still counts as done.
+                // A closed row keeps its status; the cycle that was already running still counts as done.
                 order.CompletedCount++;
-                if (order.Status is OrderStatus.Pending or OrderStatus.Active)
-                    order.Status = order.CompletedCount >= order.Quantity ? OrderStatus.Completed : OrderStatus.Active;
+                UpdateStatus(order);
                 Touch(order, cycle.Source);
             }
         }
@@ -263,7 +345,92 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
         return order is null ? null : ToOrder(order);
     }, ct);
 
+    public Task<IReadOnlyList<ProductionOrder>> CopyMissingAsync(DateOnly from, DateOnly to, string user, CancellationToken ct = default) => Write(async db =>
+    {
+        var open = await db.Orders
+            .Where(o => o.WorkDate == from && (o.Status == OrderStatus.Pending || o.Status == OrderStatus.Active))
+            .ToListAsync(ct);
+        var now = time.GetUtcNow();
+        var position = await NextPosition(db, to, ct);
+        var created = new List<OrderEntity>();
+        foreach (var source in open.Where(o => o.CompletedCount < o.Quantity).OrderBy(o => o.Position).ThenBy(o => o.Id))
+        {
+            created.Add(new OrderEntity
+            {
+                WorkDate = to,
+                OrderNumber = source.OrderNumber,
+                ProductCode = source.ProductCode,
+                Quantity = source.Quantity - source.CompletedCount,
+                Notes = source.Notes,
+                Status = OrderStatus.Pending,
+                Position = position++,
+                Version = 1,
+                CreatedAt = now,
+                CreatedBy = user,
+                UpdatedAt = now,
+                UpdatedBy = user,
+            });
+            source.Status = OrderStatus.CarriedOver;
+            Touch(source, user);
+        }
+        db.Orders.AddRange(created);
+        await SaveConcurrent(db, ct);
+        return (IReadOnlyList<ProductionOrder>)created.Select(ToOrder).ToList();
+    }, ct);
+
     // ---- Helpers -----------------------------------------------------------------------------
+
+    // ---- ERP ---------------------------------------------------------------------------------
+
+    public async Task<IReadOnlyList<ArticleCode>> ListArticlesAsync(CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var rows = await db.Articles.AsNoTracking().OrderBy(a => a.Code).ToListAsync(ct);
+        return rows.Select(a => new ArticleCode(a.Code, a.RawCode, a.FirstImportedAt, a.LastImportedAt, a.SourceFile)).ToList();
+    }
+
+    public Task<ArticleImportCounts> ImportArticlesAsync(IReadOnlyList<ParsedArticle> codes, string sourceFile, CancellationToken ct = default) => Write(async db =>
+    {
+        var now = time.GetUtcNow();
+        var wanted = codes.Select(c => c.Code).ToList();
+        var known = await db.Articles.Where(a => wanted.Contains(a.Code)).ToDictionaryAsync(a => a.Code, StringComparer.Ordinal, ct);
+        var added = 0;
+        foreach (var code in codes)
+        {
+            if (known.TryGetValue(code.Code, out var row))
+            {
+                row.RawCode = code.RawCode;
+                row.LastImportedAt = now;
+                row.SourceFile = sourceFile;
+            }
+            else
+            {
+                db.Articles.Add(new ArticleEntity
+                {
+                    Code = code.Code, RawCode = code.RawCode, FirstImportedAt = now, LastImportedAt = now, SourceFile = sourceFile,
+                });
+                added++;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        return new ArticleImportCounts(added, codes.Count - added);
+    }, ct);
+
+    public async Task<IReadOnlyList<CycleRecord>> ListCyclesStartedBetweenAsync(DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        // SQLite cannot compare DateTimeOffset values server side: walk the history newest first (ids grow with
+        // time) and stop well before the window, allowing for cycles stored out of start order.
+        var stopBefore = from - TimeSpan.FromDays(1);
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var result = new List<CycleRecord>();
+        await foreach (var c in db.Cycles.AsNoTracking().OrderByDescending(c => c.Id).AsAsyncEnumerable().WithCancellation(ct))
+        {
+            if (c.StartedAt < stopBefore) break;
+            if (c.StartedAt >= from && c.StartedAt < to) result.Add(ToCycle(c));
+        }
+        result.Reverse();
+        return result.OrderBy(c => c.StartedAt).ToList();
+    }
 
     private async Task<T> Write<T>(Func<PlanningDbContext, Task<T>> action, CancellationToken ct)
     {
@@ -282,23 +449,40 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     private static async Task SaveConcurrent(PlanningDbContext db, CancellationToken ct)
     {
         try { await db.SaveChangesAsync(ct); }
-        catch (DbUpdateConcurrencyException) { throw new PlanningConflictException("Changed in the meantime: reload and retry."); }
-        catch (DbUpdateException ex) { throw new PlanningConflictException($"Save failed: {ex.InnerException?.Message ?? ex.Message}"); }
+        catch (DbUpdateConcurrencyException) { throw new PlanningConflictException("Modificato nel frattempo: ricarica e riprova."); }
+        catch (DbUpdateException ex) { throw new PlanningConflictException($"Salvataggio fallito: {ex.InnerException?.Message ?? ex.Message}"); }
     }
 
     private static async Task<OrderEntity> LoadOrder(PlanningDbContext db, int id, CancellationToken ct) =>
         await db.Orders.FirstOrDefaultAsync(o => o.Id == id, ct)
-        ?? throw new PlanningConflictException("The order does not exist.");
+        ?? throw new PlanningConflictException("L'ordine di produzione non esiste.");
+
+    private static async Task<int> NextPosition(PlanningDbContext db, DateOnly date, CancellationToken ct) =>
+        (await db.Orders.Where(o => o.WorkDate == date).MaxAsync(o => (int?)o.Position, ct) ?? 0) + 1;
+
+    private static string Label(OrderEntity row) => row.OrderNumber.Length > 0 ? row.OrderNumber : row.ProductCode;
+
+    /// <summary>Open/Completed follow the done count; closed rows keep their status.</summary>
+    private static void UpdateStatus(OrderEntity order)
+    {
+        if (order.Status is not (OrderStatus.Pending or OrderStatus.Active or OrderStatus.Completed))
+            return;
+        order.Status = order.CompletedCount >= order.Quantity ? OrderStatus.Completed
+            : order.CompletedCount > 0 || order.Status != OrderStatus.Pending ? OrderStatus.Active
+            : OrderStatus.Pending;
+    }
 
     private static Task<bool> HasOpenOrders(PlanningDbContext db, string code, CancellationToken ct) =>
         db.Orders.AnyAsync(o => o.ProductCode == code && (o.Status == OrderStatus.Pending || o.Status == OrderStatus.Active), ct);
 
     private static async Task EnsureOrderNumberFree(PlanningDbContext db, string number, int? exceptId, CancellationToken ct)
     {
+        if (number.Length == 0)
+            return; // the order number is optional
         var used = await db.Orders.AnyAsync(o => o.OrderNumber == number && o.Id != exceptId
             && (o.Status == OrderStatus.Pending || o.Status == OrderStatus.Active), ct);
         if (used)
-            throw new PlanningConflictException($"Order number '{number}' is already used by an open order.");
+            throw new PlanningConflictException($"Il numero ordine '{number}' è già usato da un ordine aperto.");
     }
 
     private void Touch(OrderEntity row, string user)
@@ -312,9 +496,9 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     {
         row.ProductCode = draft.ProductCode;
         row.PlanName = draft.PlanName;
-        row.VelocityScale = draft.VelocityScale;
         row.Description = draft.Description;
         row.Enabled = draft.Enabled;
+        row.IsService = draft.IsService;
         row.UpdatedAt = now;
         row.UpdatedBy = user;
     }
@@ -339,9 +523,9 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
         Id = r.Id,
         ProductCode = r.ProductCode,
         PlanName = r.PlanName,
-        VelocityScale = r.VelocityScale,
         Description = r.Description,
         Enabled = r.Enabled,
+        IsService = r.IsService,
         Version = r.Version,
         CreatedAt = r.CreatedAt,
         UpdatedAt = r.UpdatedAt,
@@ -351,6 +535,7 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
     private static ProductionOrder ToOrder(OrderEntity r) => new()
     {
         Id = r.Id,
+        WorkDate = r.WorkDate,
         OrderNumber = r.OrderNumber,
         ProductCode = r.ProductCode,
         Quantity = r.Quantity,
@@ -364,4 +549,11 @@ public sealed class SqlitePlanningStore(IDbContextFactory<PlanningDbContext> fac
         UpdatedAt = r.UpdatedAt,
         UpdatedBy = r.UpdatedBy,
     };
+
+    private static CycleRecord ToCycle(CycleEntity c) =>
+        new(c.ProductCode, c.PlanName, c.OrderId, c.OrderNumber, c.Source,
+            c.StartedAt, TimeSpan.FromSeconds(c.DurationSeconds), c.Outcome, c.Message)
+        {
+            Id = c.Id,
+        };
 }

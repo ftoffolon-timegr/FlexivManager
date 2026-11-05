@@ -4,9 +4,9 @@
 @inject SnapshotStore Store
 @inject EventLog Events
 
-<PageTitle>Robot status</PageTitle>
+<PageTitle>Stato robot</PageTitle>
 
-<h1>Robot status</h1>
+<h1>Stato robot</h1>
 
 @{
     var s = _snapshot;
@@ -15,7 +15,7 @@
 <div class="robot-header">
     <span class="badge fs-6 @RobotStateStyle.BadgeClass(s.State)">@RobotStateStyle.Label(s.State)</span>
     <span class="text-muted small">
-        Backend: <b>@s.BackendName</b> · seq @s.Sequence · @s.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff") · loop @s.LoopRateHz.ToString("0") Hz
+        Backend: <b>@s.BackendName</b> · seq @s.Sequence · @s.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff") · ciclo @s.LoopRateHz.ToString("0") Hz
     </span>
 </div>
 
@@ -26,24 +26,24 @@
 
 <div class="robot-grid mt-3">
     <section class="card">
-        <div class="card-header">Status</div>
+        <div class="card-header">Stato</div>
         <table class="table table-sm mb-0">
             <tbody>
-                <tr><th>Connected</th><td>@YesNo(s.Status.Connected)</td></tr>
-                <tr><th>Operational</th><td>@YesNo(s.Status.Operational)</td></tr>
-                <tr><th>Operational status</th><td>@s.Status.OperationalStatus</td></tr>
-                <tr><th>Mode</th><td>@s.Status.Mode</td></tr>
-                <tr><th>Busy</th><td>@YesNo(s.Status.Busy)</td></tr>
-                <tr><th>Fault</th><td class="@(s.Status.Fault ? "text-danger fw-bold" : "")">@YesNo(s.Status.Fault)</td></tr>
-                <tr><th>E-stop released</th><td class="@(s.Status.Connected && !s.Status.EStopReleased ? "text-danger fw-bold" : "")">@YesNo(s.Status.EStopReleased)</td></tr>
+                <tr><th>Connesso</th><td>@YesNo(s.Status.Connected)</td></tr>
+                <tr><th>Operativo</th><td>@YesNo(s.Status.Operational)</td></tr>
+                <tr><th>Stato operativo</th><td>@s.Status.OperationalStatus</td></tr>
+                <tr><th>Modalità</th><td>@s.Status.Mode</td></tr>
+                <tr><th>Occupato</th><td>@YesNo(s.Status.Busy)</td></tr>
+                <tr><th>Anomalia</th><td class="@(s.Status.Fault ? "text-danger fw-bold" : "")">@YesNo(s.Status.Fault)</td></tr>
+                <tr><th>E-stop rilasciato</th><td class="@(s.Status.Connected && !s.Status.EStopReleased ? "text-danger fw-bold" : "")">@YesNo(s.Status.EStopReleased)</td></tr>
                 <tr><th>Plan</th><td>@(s.CurrentPlan ?? "-") @(s.Plan is { NodeName.Length: > 0 } p ? $"({p.NodeName})" : "")</td></tr>
-                <tr><th>Cycles</th><td>@s.CompletedCycles @(s.LastCycleTime is { } t ? $"· last {t.TotalSeconds:0.0} s" : "")</td></tr>
+                <tr><th>Cicli</th><td>@s.CompletedCycles @(s.LastCycleTime is { } t ? $"· ultimo {t.TotalSeconds:0.0} s" : "")</td></tr>
             </tbody>
         </table>
     </section>
 
     <section class="card">
-        <div class="card-header">Joints</div>
+        <div class="card-header">Giunti</div>
         @if (s.States is { } st)
         {
             <table class="table table-sm mb-0 num">
@@ -64,12 +64,12 @@
         }
         else
         {
-            <div class="card-body text-muted">No data (not connected).</div>
+            <div class="card-body text-muted">Nessun dato (non collegato).</div>
         }
     </section>
 
     <section class="card">
-        <div class="card-header">TCP pose (world)</div>
+        <div class="card-header">Posa TCP (mondo)</div>
         @if (s.States is { } st2)
         {
             var pose = st2.TcpPose;
@@ -86,12 +86,12 @@
         }
         else
         {
-            <div class="card-body text-muted">No data (not connected).</div>
+            <div class="card-body text-muted">Nessun dato (non collegato).</div>
         }
     </section>
 
     <section class="card events">
-        <div class="card-header">Events</div>
+        <div class="card-header">Eventi</div>
         <ul class="list-unstyled small mb-0 p-2">
             @foreach (var e in _events.Reverse())
             {
@@ -164,7 +164,7 @@
 
     private static double Deg(double rad) => rad * 180.0 / Math.PI;
 
-    private static string YesNo(bool value) => value ? "yes" : "no";
+    private static string YesNo(bool value) => value ? "sì" : "no";
 
     private static string EventClass(EventLevel level) => level switch
     {

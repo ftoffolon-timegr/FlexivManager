@@ -90,13 +90,13 @@ public sealed class RobotCommandService : IDisposable
     {
         if (command.IsMotion)
         {
-            Log(EventLevel.Warning, $"{command.Name} refused from {source}: motion commands require confirmation.");
-            return Task.FromResult(CommandResult.Rejected("Motion commands require confirmation."));
+            Log(EventLevel.Warning, $"{command.Label} da {source} rifiutato: i comandi di movimento richiedono una conferma.");
+            return Task.FromResult(CommandResult.Rejected("I comandi di movimento richiedono una conferma."));
         }
         if (command is StopCommand or StopPlanCommand)
         {
             Disarm();
-            VoidConfirmations(command.Name);
+            VoidConfirmations(command.Label);
         }
         return EnqueueAsync(command, source, timeout, cancellationToken);
     }
@@ -104,14 +104,15 @@ public sealed class RobotCommandService : IDisposable
     // ---- Motion commands: two-step confirmation ----------------------------------------------
 
     /// <summary>
-    /// Step 1 for a cycle: the job of <paramref name="productCode"/>, counted for <paramref name="orderId"/>
-    /// when given (the order code wins). Reads the current job version: edits apply from the next cycle.
+    /// Step 1 for a cycle: the job of <paramref name="productCode"/>, counted for the plan row
+    /// <paramref name="orderId"/> (the row code wins). Without a row only service jobs may run.
+    /// Reads the current job version: edits apply from the next cycle.
     /// </summary>
     public async Task<ConfirmationRequest> RequestStartAsync(string productCode, int? orderId, string source, CancellationToken ct = default)
     {
         var (request, error) = await BuildCycleRequestAsync(productCode, orderId, ct);
         if (request is null)
-            return Reject($"Start '{ProductCode.Normalize(productCode)}'", error!, source);
+            return Reject($"Avvio '{ProductCode.Normalize(productCode)}'", error!, source);
         return RequestConfirmation(new StartCycleCommand(request), source);
     }
 
@@ -138,15 +139,15 @@ public sealed class RobotCommandService : IDisposable
     public async Task<CommandResult> StartNextCycleAsync(int orderId, string source, CancellationToken ct = default)
     {
         if (!CanRepeatWithoutConfirmation(orderId))
-            return CommandResult.Rejected("Confirmation required for this start.");
+            return CommandResult.Rejected("Per questo avvio serve la conferma.");
         var (request, error) = await BuildCycleRequestAsync("", orderId, ct);
         if (request is null)
         {
-            Log(EventLevel.Warning, $"Next cycle refused from {source}: {error}");
+            Log(EventLevel.Warning, $"Ciclo successivo rifiutato da {source}: {error}");
             return CommandResult.Rejected(error!);
         }
         var command = new StartCycleCommand(request);
-        Log(EventLevel.Info, $"Next cycle requested by {source}: {command.Describe()}.");
+        Log(EventLevel.Info, $"Ciclo successivo richiesto da {source}: {command.Describe()}.");
         return await EnqueueAsync(command, source, null, ct);
     }
 
@@ -158,7 +159,7 @@ public sealed class RobotCommandService : IDisposable
     {
         var summary = command.Describe();
         if (!command.IsMotion)
-            return Reject(summary, $"{command.Name} does not need confirmation.", source);
+            return Reject(summary, $"{command.Label} non richiede conferma.", source);
 
         var rejection = CommandPolicy.Check(_snapshots.Current.State, command);
         if (rejection is not null)
@@ -170,7 +171,7 @@ public sealed class RobotCommandService : IDisposable
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         _confirmations[token] = new PendingConfirmation(command, summary, source, expiresAt);
 
-        Log(EventLevel.Info, $"Confirmation requested by {source}: {summary} (expires in {_options.ConfirmationTimeout.TotalSeconds:0} s).");
+        Log(EventLevel.Info, $"Conferma richiesta da {source}: {summary} (scade tra {_options.ConfirmationTimeout.TotalSeconds:0} s).");
         return new ConfirmationRequest(token, null, summary, expiresAt);
     }
 
@@ -178,45 +179,39 @@ public sealed class RobotCommandService : IDisposable
     {
         // Let the recorder store the previous cycle first, so order counts are up to date.
         if (!await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2), ct))
-            return (null, "Cycle history is still being saved: retry.");
+            return (null, "Lo storico dei cicli è ancora in salvataggio: riprova.");
 
-        // One order in progress at a time: while an order is Active nothing else may run
-        // (neither another order nor a one-off job).
-        if (await FindOtherActiveOrderAsync(orderId, ct) is { } active)
-            return (null, OrderInProgressMessage(active));
-
+        // The operator works only today's plan, rows in any order; service jobs (e.g. HOME) run outside it.
         ProductionOrder? order = null;
         if (orderId is { } id)
         {
             order = await _planning.GetOrderAsync(id, ct);
             if (order is null || !order.IsOpen)
-                return (null, "The order is no longer open.");
+                return (null, "L'ordine di produzione non è più aperto.");
+            if (order.WorkDate != WorkDay.Today(_time))
+                return (null, $"L'ordine {order.Label} è del {order.WorkDate:dd/MM/yyyy}, non di oggi.");
             if (order.Remaining == 0)
-                return (null, $"Order {order.OrderNumber} is already complete.");
+                return (null, $"L'ordine {order.Label} è già completato.");
             productCode = order.ProductCode;
         }
 
         var job = await _planning.FindJobByCodeAsync(productCode, ct);
         if (job is null)
-            return (null, $"No job for product code '{ProductCode.Normalize(productCode)}'.");
+            return (null, $"Il codice '{ProductCode.Normalize(productCode)}' non ha un plan associato.");
         if (!job.Enabled)
-            return (null, $"Job for '{job.ProductCode}' is disabled.");
-        if (job.VelocityScale > _options.MaxVelocityScale)
-            return (null, $"Velocity {job.VelocityScale} % exceeds the limit of {_options.MaxVelocityScale} %.");
+            return (null, $"Il codice '{job.ProductCode}' è disattivato.");
+        if (order is null && !job.IsService)
+            return (null, $"'{job.ProductCode}' non è un codice di servizio: leggi il codice per selezionare il suo ordine di oggi.");
+        if (order is not null && job.IsService)
+            return (null, $"'{job.ProductCode}' è un codice di servizio e non può essere conteggiato in un ordine.");
         if (!_snapshots.Current.AvailablePlans.Contains(job.PlanName))
-            return (null, $"Plan '{job.PlanName}' is not stored on the robot.");
+            return (null, $"Il plan '{job.PlanName}' non è presente sul robot.");
 
         var request = new CycleRequest(job, order?.Id, order?.OrderNumber);
         if (CommandPolicy.Check(_snapshots.Current.State, new StartCycleCommand(request)) is { } rejection)
             return (null, rejection);
         return (request, null);
     }
-
-    private async Task<ProductionOrder?> FindOtherActiveOrderAsync(int? orderId, CancellationToken ct) =>
-        (await _planning.ListOpenOrdersAsync(ct)).FirstOrDefault(o => o.Status == OrderStatus.Active && o.Id != orderId);
-
-    internal static string OrderInProgressMessage(ProductionOrder active) =>
-        $"Order {active.OrderNumber} is in progress ({active.CompletedCount}/{active.Quantity}): complete or cancel it before starting another order.";
 
     private void Disarm()
     {
@@ -228,16 +223,16 @@ public sealed class RobotCommandService : IDisposable
     {
         if (string.IsNullOrEmpty(token) || !_confirmations.TryRemove(token, out var pending))
         {
-            Log(EventLevel.Warning, $"Confirmation from {source} refused: unknown, used or voided token.");
-            return Task.FromResult(CommandResult.Rejected("Unknown, already used or voided confirmation."));
+            Log(EventLevel.Warning, $"Conferma da {source} rifiutata: token sconosciuto, già usato o annullato.");
+            return Task.FromResult(CommandResult.Rejected("Conferma sconosciuta, già usata o annullata."));
         }
         if (_time.GetUtcNow() > pending.ExpiresAt)
         {
-            Log(EventLevel.Warning, $"Confirmation from {source} refused: expired ({pending.Summary}).");
-            return Task.FromResult(CommandResult.Rejected("Confirmation expired: request the command again."));
+            Log(EventLevel.Warning, $"Conferma da {source} rifiutata: scaduta ({pending.Summary}).");
+            return Task.FromResult(CommandResult.Rejected("Conferma scaduta: richiedi di nuovo il comando."));
         }
 
-        Log(EventLevel.Info, $"Confirmed by {source}: {pending.Summary}.");
+        Log(EventLevel.Info, $"Confermato da {source}: {pending.Summary}.");
         return ConfirmedAsync(pending.Command, source, cancellationToken);
     }
 
@@ -254,13 +249,13 @@ public sealed class RobotCommandService : IDisposable
     {
         if (string.IsNullOrEmpty(token) || !_confirmations.TryRemove(token, out var pending))
             return false;
-        Log(EventLevel.Info, $"Confirmation cancelled by {source}: {pending.Summary}.");
+        Log(EventLevel.Info, $"Conferma annullata da {source}: {pending.Summary}.");
         return true;
     }
 
     private ConfirmationRequest Reject(string summary, string reason, string source)
     {
-        Log(EventLevel.Warning, $"Request refused from {source}: {summary}: {reason}");
+        Log(EventLevel.Warning, $"Richiesta rifiutata da {source}: {summary}: {reason}");
         return new ConfirmationRequest(null, reason, summary, _time.GetUtcNow());
     }
 
@@ -269,7 +264,7 @@ public sealed class RobotCommandService : IDisposable
         foreach (var token in _confirmations.Keys)
         {
             if (_confirmations.TryRemove(token, out var pending))
-                Log(EventLevel.Info, $"Pending confirmation voided by {reason}: {pending.Summary}.");
+                Log(EventLevel.Info, $"Conferma in attesa annullata da {reason}: {pending.Summary}.");
         }
     }
 
@@ -290,7 +285,7 @@ public sealed class RobotCommandService : IDisposable
         var pending = new PendingCommand(command, source);
         var queue = command is StopCommand ? _stopQueue : _normalQueue;
         if (!queue.Writer.TryWrite(pending))
-            return CommandResult.Rejected("Command queue is full.");
+            return CommandResult.Rejected("La coda dei comandi è piena.");
         _wake.Set();
 
         try
@@ -300,14 +295,14 @@ public sealed class RobotCommandService : IDisposable
         catch (TimeoutException)
         {
             return pending.TryCancel()
-                ? CommandResult.TimedOut($"{command.Name} was not started in time and has been withdrawn.")
-                : CommandResult.TimedOut($"{command.Name} started but did not complete in time.");
+                ? CommandResult.TimedOut($"{command.Label} non è partito in tempo ed è stato ritirato.")
+                : CommandResult.TimedOut($"{command.Label} è partito ma non è terminato in tempo.");
         }
         catch (OperationCanceledException)
         {
             return pending.TryCancel()
-                ? CommandResult.Cancelled($"{command.Name} cancelled before execution.")
-                : CommandResult.Cancelled($"{command.Name} cancelled by caller while executing.");
+                ? CommandResult.Cancelled($"{command.Label} annullato prima dell'esecuzione.")
+                : CommandResult.Cancelled($"{command.Label} annullato dal chiamante durante l'esecuzione.");
         }
     }
 

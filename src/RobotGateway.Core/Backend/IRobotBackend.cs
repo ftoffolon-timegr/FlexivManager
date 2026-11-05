@@ -36,6 +36,7 @@ public interface IRobotBackend : IDisposable
     void Enable();
     void ClearFault();
     void SwitchMode(RobotMode mode);
+    /// <summary>Global robot velocity override [%]. The worker only resets it to 100 before each plan.</summary>
     void SetVelocityScale(int percent);
     void ExecutePlan(string name, bool continueExec = false);
     void PausePlan(bool pause);

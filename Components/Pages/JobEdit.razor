@@ -4,21 +4,21 @@
 @inject IServiceProvider Services
 @inject NavigationManager Navigation
 
-<PageTitle>@(Id is null ? "New job" : "Edit job")</PageTitle>
+<PageTitle>@(Id is null ? "Nuovo codice" : "Modifica codice")</PageTitle>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-    <h1 class="mb-0">@(Id is null ? "New job" : $"Job {_job?.ProductCode}")</h1>
+    <h1 class="mb-0">@(Id is null ? "Nuovo codice" : $"Codice {_job?.ProductCode}")</h1>
     <PlannerAccount />
 </div>
 
 @if (_planning is null)
 {
-    <div class="alert alert-info">Editing is available on the remote planning station only.</div>
+    <div class="alert alert-info">Le modifiche si fanno solo dalla postazione remota di pianificazione.</div>
     return;
 }
 @if (Id is not null && _job is null && _loaded)
 {
-    <div class="alert alert-warning">Job not found. <a href="jobs">Back to jobs</a></div>
+    <div class="alert alert-warning">Codice non trovato. <a href="jobs">Torna ai codici</a></div>
     return;
 }
 
@@ -34,55 +34,87 @@
 
 <div class="card mb-3" style="max-width: 40rem">
     <div class="card-body">
-        <div class="mb-3">
-            <label class="form-label" for="code">Product / job code</label>
-            <input id="code" class="form-control text-uppercase" maxlength="@ProductCode.MaxLength" @bind="_code" />
-            <div class="form-text">Case-insensitive. The barcode must contain exactly this code.</div>
+        <div class="form-check mb-3">
+            <input id="service" type="checkbox" class="form-check-input" @bind="_isService" />
+            <label class="form-check-label" for="service">Codice di servizio (es. HOME): sempre disponibile all'operatore, non pianificato, non conteggiato</label>
         </div>
         <div class="mb-3">
-            <label class="form-label" for="plan">Robot plan</label>
+            <label class="form-label" for="code">Codice articolo</label>
+            @if (_isService || !_planning.OnlyImportedCodes)
+            {
+                <input id="code" class="form-control text-uppercase" maxlength="@ProductCode.MaxLength" @bind="_code" />
+                <div class="form-text">
+                    @(_isService ? "Codice di servizio: scritto a mano, non arriva dal gestionale." : "Codice libero (Erp:OnlyImportedCodes = false).")
+                    Maiuscole e minuscole sono equivalenti. Il barcode deve contenere esattamente questo codice.
+                </div>
+            }
+            else
+            {
+                <select id="code" class="form-select" @bind="_code">
+                    <option value="">-- scegli un codice dal gestionale --</option>
+                    @foreach (var article in _choices)
+                    {
+                        <option value="@article.Code">@article.RawCode</option>
+                    }
+                    @if (_job is not null && !_job.IsService && !_choices.Any(a => a.Code == _job.ProductCode))
+                    {
+                        <option value="@_job.ProductCode">@_job.ProductCode (non ricevuto dal gestionale)</option>
+                    }
+                </select>
+                @if (_choices.Count == 0)
+                {
+                    <div class="form-text text-warning">
+                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                        Nessun codice articolo libero: tutti i codici ricevuti hanno già un programma. Attendi un nuovo file del
+                        gestionale o usa "Verifica nuovo file" nella pagina <a href="jobs">Codici lavoro</a>.
+                    </div>
+                }
+                else
+                {
+                    <div class="form-text">Solo i codici ricevuti dal gestionale che non hanno ancora un programma (@_choices.Count).</div>
+                }
+            }
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="plan">Plan del robot</label>
             <select id="plan" class="form-select" @bind="_planName">
-                <option value="">-- choose --</option>
+                <option value="">-- scegli --</option>
                 @foreach (var plan in _planning.RobotPlans)
                 {
                     <option value="@plan">@plan</option>
                 }
                 @if (!string.IsNullOrEmpty(_planName) && !_planning.RobotPlans.Contains(_planName))
                 {
-                    <option value="@_planName">@_planName (not on robot)</option>
+                    <option value="@_planName">@_planName (non presente sul robot)</option>
                 }
             </select>
             @if (_planning.RobotPlans.Count == 0)
             {
-                <div class="form-text text-warning">Robot plan list not available: the robot has not been connected yet.</div>
+                <div class="form-text text-warning">Elenco plan non disponibile: il robot non è ancora stato collegato.</div>
             }
         </div>
         <div class="mb-3">
-            <label class="form-label" for="velocity">Velocity % (max @_planning.MaxVelocityScale)</label>
-            <input id="velocity" type="number" class="form-control" min="1" max="@_planning.MaxVelocityScale" style="max-width: 8rem" @bind="_velocity" />
-        </div>
-        <div class="mb-3">
-            <label class="form-label" for="description">Description</label>
+            <label class="form-label" for="description">Descrizione</label>
             <input id="description" class="form-control" maxlength="@PlanningValidator.MaxDescriptionLength" @bind="_description" />
         </div>
         <div class="form-check mb-3">
             <input id="enabled" type="checkbox" class="form-check-input" @bind="_enabled" />
-            <label class="form-check-label" for="enabled">Enabled (can be run locally)</label>
+            <label class="form-check-label" for="enabled">Attivo (eseguibile dalla postazione operatore)</label>
         </div>
 
         <div class="d-flex flex-wrap gap-2">
-            <button class="btn btn-primary" disabled="@_busy" @onclick="SaveAsync"><i class="bi bi-save" aria-hidden="true"></i> Save</button>
-            <a class="btn btn-secondary" href="jobs">Cancel</a>
+            <button class="btn btn-primary" disabled="@_busy" @onclick="SaveAsync"><i class="bi bi-save" aria-hidden="true"></i> Salva</button>
+            <a class="btn btn-secondary" href="jobs">Annulla</a>
             @if (_job is not null)
             {
                 @if (_confirmDelete)
                 {
-                    <button class="btn btn-danger ms-auto" disabled="@_busy" @onclick="DeleteAsync">Confirm delete</button>
-                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Keep</button>
+                    <button class="btn btn-danger ms-auto" disabled="@_busy" @onclick="DeleteAsync">Conferma eliminazione</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Mantieni</button>
                 }
                 else
                 {
-                    <button class="btn btn-outline-danger ms-auto" @onclick="() => _confirmDelete = true"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    <button class="btn btn-outline-danger ms-auto" @onclick="() => _confirmDelete = true"><i class="bi bi-trash" aria-hidden="true"></i> Elimina</button>
                 }
             }
         </div>
@@ -91,9 +123,9 @@
 
 @if (_history.Count > 0)
 {
-    <h2 class="h5">History</h2>
+    <h2 class="h5">Storico</h2>
     <table class="table table-sm small" style="max-width: 40rem">
-        <thead><tr><th>Version</th><th>Action</th><th>By</th><th>When</th></tr></thead>
+        <thead><tr><th>Versione</th><th>Azione</th><th>Utente</th><th>Quando</th></tr></thead>
         <tbody>
             @foreach (var h in _history)
             {
@@ -105,6 +137,9 @@
 
 @code {
     [Parameter] public int? Id { get; set; }
+
+    /// <summary>Pre-filled code, from the ERP codes list of the Jobs page.</summary>
+    [SupplyParameterFromQuery(Name = "code")] public string? InitialCode { get; set; }
     [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
 
     private PlanningService? _planning;
@@ -112,28 +147,31 @@
     private bool _loaded;
     private string _code = "";
     private string _planName = "";
-    private int _velocity = 50;
     private string? _description;
     private bool _enabled = true;
+    private bool _isService;
     private IReadOnlyList<string> _errors = [];
     private IReadOnlyList<JobHistoryEntry> _history = [];
     private bool _busy;
     private bool _confirmDelete;
+    private IReadOnlyList<ArticleCode> _choices = [];
 
     protected override async Task OnInitializedAsync()
     {
         _planning = Services.GetService<PlanningService>();
         if (_planning is null) return;
-        _velocity = Math.Min(_velocity, _planning.MaxVelocityScale);
+        if (Id is null && !string.IsNullOrWhiteSpace(InitialCode))
+            _code = ProductCode.Normalize(InitialCode);
         if (Id is { } id)
         {
             _job = await _planning.Reader.GetJobAsync(id);
             if (_job is not null)
             {
-                (_code, _planName, _velocity, _description, _enabled) = (_job.ProductCode, _job.PlanName, _job.VelocityScale, _job.Description, _job.Enabled);
+                (_code, _planName, _description, _enabled, _isService) = (_job.ProductCode, _job.PlanName, _job.Description, _job.Enabled, _job.IsService);
                 _history = await _planning.Reader.GetJobHistoryAsync(id);
             }
         }
+        _choices = await _planning.ListAssignableArticlesAsync(_job?.ProductCode);
         _loaded = true;
     }
 
@@ -143,7 +181,7 @@
         try
         {
             var user = (await AuthState).User;
-            var draft = new JobDraft(_code, _planName, _velocity, _description, _enabled);
+            var draft = new JobDraft(_code, _planName, _description, _enabled, _isService);
             var result = _job is null
                 ? await _planning!.CreateJobAsync(draft, user)
                 : await _planning!.UpdateJobAsync(_job.Id, _job.Version, draft, user);

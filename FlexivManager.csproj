@@ -5,9 +5,19 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
-    <!-- The host lives in the solution root: keep the library/test folders out of its globs. -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;third_party/**</DefaultItemExcludes>
+    <!-- The host lives in the solution root: keep the library/test/installer folders out of its globs. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;third_party/**;installer/**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows service hosting (installer/install.ps1 registers the service). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Development password hash and API key: never shipped to a customer PC. -->
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="src\RobotGateway.Core\RobotGateway.Core.csproj" />

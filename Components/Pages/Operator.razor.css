@@ -1,9 +1,42 @@
-.operator-grid {
+/* Zone 1 (code) and zone 2 (START/STOP) side by side, today's plan below across the full width. */
+.operator-layout {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+    grid-template-areas:
+        "code controls"
+        "plan plan";
     gap: 1rem;
 }
 
-.worklist {
-    grid-column: 1 / -1;
+.zone-code { grid-area: code; }
+.zone-controls { grid-area: controls; }
+.zone-plan { grid-area: plan; }
+
+/* Narrow screens: one column, START/STOP first. */
+@media (max-width: 900px) {
+    .operator-layout {
+        grid-template-columns: 1fr;
+        grid-template-areas: "controls" "code" "plan";
+    }
+}
+
+/* The two big buttons, same size, next to each other. */
+.control-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.btn-xl {
+    min-height: 9rem;
+    font-size: 2.25rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+}
+
+/* The selected code, readable from a distance. */
+.selected-code {
+    font-size: 2rem;
+    font-weight: 700;
+    font-family: var(--bs-font-monospace);
 }

@@ -7,6 +7,12 @@ public static class RobotStateStyle
 {
     public static string Label(RobotServiceState state) => state switch
     {
+        RobotServiceState.Disconnected => "SCOLLEGATO",
+        RobotServiceState.Connected => "CONNESSO",
+        RobotServiceState.Operational => "PRONTO",
+        RobotServiceState.Running => "IN ESECUZIONE",
+        RobotServiceState.Paused => "IN PAUSA",
+        RobotServiceState.Fault => "ANOMALIA",
         RobotServiceState.EStop => "E-STOP",
         _ => state.ToString().ToUpperInvariant(),
     };

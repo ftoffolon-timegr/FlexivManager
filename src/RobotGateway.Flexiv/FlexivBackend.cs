@@ -32,17 +32,23 @@ public sealed class FlexivBackend(FlexivBackendOptions options) : IRobotBackend
         if (_robot is not null && SafeConnected()) return;
         Disconnect();
         if (string.IsNullOrWhiteSpace(options.SerialNumber))
-            throw new RobotBackendException("Robot:Flexiv:SerialNumber is not configured.");
+            throw new RobotBackendException("Robot:Flexiv:SerialNumber non è configurato.");
 
         NativeRdkLoader.EnsureLoaded(options.RdkVersion);
         try
         {
             _robot = new Rdk.Robot(options.SerialNumber.Trim(), options.NetworkInterfaces, options.Verbose, lite: false);
+        /*    var plans = _robot.plan_list();
+            int i = 0;
+            foreach (var item in plans)
+            {
+                i++;
+            }*/
         }
         catch (Exception ex) when (ex is not RobotBackendException)
         {
             // Includes "incompatible RDK version", wrong serial, robot not reachable, RDK not enabled on the robot.
-            throw new RobotBackendException($"Connection to {options.SerialNumber} failed: {ex.Message}", ex);
+            throw new RobotBackendException($"Connessione a {options.SerialNumber} fallita: {ex.Message}", ex);
         }
         _events.Reset();
     }
@@ -94,7 +100,7 @@ public sealed class FlexivBackend(FlexivBackendOptions options) : IRobotBackend
     public void ClearFault() => Call(r =>
     {
         if (!r.ClearFault(Math.Max(1, options.ClearFaultTimeoutSeconds)))
-            throw new InvalidOperationException("Fault not cleared (it may need a manual check on the robot).");
+            throw new InvalidOperationException("Anomalia non resettata (può servire un controllo manuale sul robot).");
     });
 
     public void SwitchMode(RobotMode mode) => Call(r => r.SwitchMode(FlexivMapping.ToRdk(mode)));
@@ -121,7 +127,7 @@ public sealed class FlexivBackend(FlexivBackendOptions options) : IRobotBackend
 
     private T Call<T>(Func<Rdk.Robot, T> call)
     {
-        var robot = _robot ?? throw new RobotBackendException("Not connected.");
+        var robot = _robot ?? throw new RobotBackendException("Non connesso.");
         try
         {
             return call(robot);
@@ -130,7 +136,7 @@ public sealed class FlexivBackend(FlexivBackendOptions options) : IRobotBackend
         {
             throw SafeConnected()
                 ? new InvalidOperationException(ex.Message, ex)
-                : new RobotBackendException($"Link lost: {ex.Message}", ex);
+                : new RobotBackendException($"Collegamento perso: {ex.Message}", ex);
         }
     }
 

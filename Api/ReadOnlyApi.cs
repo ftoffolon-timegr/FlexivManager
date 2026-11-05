@@ -2,7 +2,10 @@ using RobotGateway.Core;
 
 namespace FlexivManager.Api;
 
-/// <summary>Read-only JSON API, mapped on both hosts. GET only: nothing here can command the robot or edit data.</summary>
+/// <summary>
+/// Read-only JSON API, mapped on both hosts and open (no login, no key). GET only: nothing here can command
+/// the robot or edit data. Planning writes are in <see cref="PlanningApi"/> (monitoring host, API key).
+/// </summary>
 public static class ReadOnlyApi
 {
     /// <summary>A snapshot older than this means the worker loop is stuck.</summary>
@@ -18,7 +21,7 @@ public static class ReadOnlyApi
         api.MapGet("/telemetry", (SnapshotStore store) =>
             TelemetryDto.From(store.Current) is { } telemetry
                 ? Results.Ok(telemetry)
-                : Results.Problem("No telemetry: robot not connected.", statusCode: StatusCodes.Status503ServiceUnavailable));
+                : Results.Problem("Nessuna telemetria: robot non connesso.", statusCode: StatusCodes.Status503ServiceUnavailable));
 
         api.MapGet("/events", (EventLog events, int? max) =>
             events.GetRecent(Math.Clamp(max ?? 50, 1, 500)));
@@ -28,9 +31,25 @@ public static class ReadOnlyApi
         api.MapGet("/jobs", async (IPlanningReader planning, SnapshotStore store, CancellationToken ct) =>
         {
             var onRobot = store.Current.AvailablePlans;
-            return (await planning.ListJobsAsync(ct)).Select(j => new JobDto(
-                j.Id, j.ProductCode, j.PlanName, j.VelocityScale, j.Description, j.Enabled,
-                onRobot.Contains(j.PlanName), j.Version, j.UpdatedAt, j.UpdatedBy));
+            return (await planning.ListJobsAsync(ct)).Select(j => JobDto.From(j, onRobot));
+        });
+
+        api.MapGet("/jobs/{id:int}", async (IPlanningReader planning, SnapshotStore store, int id, CancellationToken ct) =>
+            await planning.GetJobAsync(id, ct) is { } job
+                ? Results.Ok(JobDto.From(job, store.Current.AvailablePlans))
+                : Results.NotFound());
+
+        // Daily work plan and its report. Without ?date=yyyy-MM-dd: today (local date of this PC).
+        api.MapGet("/plan", async (IPlanningReader planning, TimeProvider time, DateOnly? date, CancellationToken ct) =>
+            await PlanDto.LoadAsync(planning, date ?? WorkDay.Today(time), ct));
+
+        api.MapGet("/plan/rows/{id:int}", async (IPlanningReader planning, int id, CancellationToken ct) =>
+            await planning.GetOrderAsync(id, ct) is { } row ? Results.Ok(row) : Results.NotFound());
+
+        api.MapGet("/report", async (IPlanningReader planning, TimeProvider time, DateOnly? date, CancellationToken ct) =>
+        {
+            var day = date ?? WorkDay.Today(time);
+            return DailyReport.Build(day, await planning.ListPlanAsync(day, ct));
         });
 
         api.MapGet("/orders", async (IPlanningReader planning, CancellationToken ct) => new
@@ -109,10 +128,22 @@ public sealed record JobDto(
     int Id,
     string ProductCode,
     string PlanName,
-    int VelocityScale,
     string? Description,
     bool Enabled,
+    bool IsService,
     bool PlanOnRobot,
     int Version,
     DateTimeOffset UpdatedAt,
-    string UpdatedBy);
+    string UpdatedBy)
+{
+    public static JobDto From(Job j, IReadOnlyList<string> robotPlans) => new(
+        j.Id, j.ProductCode, j.PlanName, j.Description, j.Enabled, j.IsService,
+        robotPlans.Contains(j.PlanName), j.Version, j.UpdatedAt, j.UpdatedBy);
+}
+
+/// <summary>Every row of the work plan of one day, by position.</summary>
+public sealed record PlanDto(DateOnly Date, IReadOnlyList<ProductionOrder> Rows)
+{
+    public static async Task<PlanDto> LoadAsync(IPlanningReader planning, DateOnly date, CancellationToken ct) =>
+        new(date, await planning.ListPlanAsync(date, ct));
+}

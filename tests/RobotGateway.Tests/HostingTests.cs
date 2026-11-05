@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using FlexivManager.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -13,9 +15,11 @@ namespace RobotGateway.Tests;
 public sealed partial class HostingTests : IAsyncLifetime
 {
     private const string Password = "secret-test";
+    private const string ApiKey = "test-api-key-0123456789";
     private static readonly string PasswordHash = PasswordHasher.Hash(Password);
 
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"hosting-test-{Guid.NewGuid():N}.db");
+    private readonly string _importDir = Directory.CreateTempSubdirectory("erp-import-test-").FullName;
     private WebApplication _operator = null!;
     private WebApplication _monitoring = null!;
     private readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
@@ -33,7 +37,12 @@ public sealed partial class HostingTests : IAsyncLifetime
                 ["Hosts:Monitoring:RequireLoginForEdit"] = "true",
                 ["Hosts:Monitoring:Editor:UserName"] = "planner",
                 ["Hosts:Monitoring:Editor:PasswordHash"] = PasswordHash,
+                ["Hosts:Monitoring:Api:Key"] = ApiKey,
+                ["Hosts:Monitoring:Api:ClientName"] = "erp",
                 ["Planning:DatabasePath"] = _dbPath,
+                ["Erp:ImportFolder"] = _importDir,
+                ["Erp:PollInterval"] = "01:00:00",
+                ["Erp:MinFileAge"] = "00:00:00",
             };
             foreach (var (key, value) in overrides ?? [])
                 settings[key] = value;
@@ -55,6 +64,7 @@ public sealed partial class HostingTests : IAsyncLifetime
         await _operator.DisposeAsync();
         SqliteConnection.ClearAllPools();
         try { File.Delete(_dbPath); } catch (IOException) { }
+        try { Directory.Delete(_importDir, recursive: true); } catch (IOException) { }
     }
 
     private string Remote(string path) => _monitoring.Urls.First() + path;
@@ -127,6 +137,10 @@ public sealed partial class HostingTests : IAsyncLifetime
     [InlineData("/api/jobs")]
     [InlineData("/api/orders")]
     [InlineData("/api/cycles")]
+    [InlineData("/api/plan")]
+    [InlineData("/api/plan?date=2026-01-31")]
+    [InlineData("/api/report")]
+    [InlineData("/api/report?date=2026-01-31")]
     public async Task ReadOnlyApi_IsOpenOnTheRemoteHost(string path) =>
         Assert.Equal(HttpStatusCode.OK, (await _http.GetAsync(Remote(path))).StatusCode);
 
@@ -136,6 +150,118 @@ public sealed partial class HostingTests : IAsyncLifetime
         var response = await _http.PostAsync(Remote("/api/status"), null);
         // 400/405 depending on which endpoint answers: what matters is that nothing is accepted.
         Assert.False(response.IsSuccessStatusCode, $"POST returned {(int)response.StatusCode}");
+    }
+
+    // ---- REST write API ----------------------------------------------------------------------
+
+    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, object? body, string? key = ApiKey)
+    {
+        using var request = new HttpRequestMessage(method, url) { Content = body is null ? null : JsonContent.Create(body) };
+        if (key is not null)
+            request.Headers.Add(ApiKeyOptions.HeaderName, key);
+        return await _http.SendAsync(request);
+    }
+
+    private static async Task<JsonElement> JsonAsync(HttpResponseMessage response) =>
+        JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("wrong-key")]
+    public async Task WriteApi_WithoutTheRightKey_IsRefused(string? key)
+    {
+        var response = await SendAsync(HttpMethod.Post, Remote("/api/jobs"), new { productCode = "K1", planName = "PLAN-Home" }, key);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await _monitoring.Services.GetRequiredService<IPlanningReader>().ListJobsAsync());
+    }
+
+    [Fact]
+    public async Task WriteApi_WithKey_PlansTheDay_AndTheReportFollows()
+    {
+        await ImportCodesAsync("api1");
+        var job = await SendAsync(HttpMethod.Post, Remote("/api/jobs"), new { productCode = "api1", planName = "PLAN-Home" });
+        Assert.Equal(HttpStatusCode.Created, job.StatusCode);
+        Assert.Equal("API1", (await JsonAsync(job)).GetProperty("productCode").GetString());
+
+        var row = await SendAsync(HttpMethod.Post, Remote("/api/plan/rows"), new { productCode = "API1", quantity = 3, orderNumber = "ERP-7" });
+        Assert.Equal(HttpStatusCode.Created, row.StatusCode);
+        var created = await JsonAsync(row);
+        Assert.Equal("erp", created.GetProperty("updatedBy").GetString());
+        Assert.Equal("Pending", created.GetProperty("status").GetString());
+
+        var plan = await JsonAsync(await _http.GetAsync(Remote("/api/plan")));
+        Assert.Equal("API1", Assert.Single(plan.GetProperty("rows").EnumerateArray()).GetProperty("productCode").GetString());
+
+        var report = await JsonAsync(await _http.GetAsync(Remote("/api/report")));
+        Assert.Equal(3, report.GetProperty("totals").GetProperty("missing").GetInt32());
+        Assert.Equal("Missing", report.GetProperty("rows")[0].GetProperty("progress").GetString());
+    }
+
+    [Fact]
+    public async Task WriteApi_InvalidRow_Returns400WithTheErrors()
+    {
+        var response = await SendAsync(HttpMethod.Post, Remote("/api/plan/rows"), new { productCode = "NOPE", quantity = 0 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var errors = (await JsonAsync(response)).GetProperty("errors");
+        Assert.Contains(errors.EnumerateArray(), e => e.GetString()!.Contains("quantità"));
+    }
+
+    [Fact]
+    public async Task WriteApi_StaleVersion_Returns409()
+    {
+        await ImportCodesAsync("V1");
+        var created = await JsonAsync(await SendAsync(HttpMethod.Post, Remote("/api/jobs"), new { productCode = "V1", planName = "PLAN-Home" }));
+        var id = created.GetProperty("id").GetInt32();
+        var version = created.GetProperty("version").GetInt32();
+
+        var first = await SendAsync(HttpMethod.Put, Remote($"/api/jobs/{id}"), new { productCode = "V1", planName = "PLAN-Polish", version });
+        var second = await SendAsync(HttpMethod.Put, Remote($"/api/jobs/{id}"), new { productCode = "V1", planName = "PLAN-Home", version });
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task WriteApi_DoesNotExistOnTheOperatorHost()
+    {
+        var response = await SendAsync(HttpMethod.Post, Local("/api/jobs"), new { productCode = "L1", planName = "PLAN-Home" });
+
+        Assert.False(response.IsSuccessStatusCode, $"POST returned {(int)response.StatusCode}");
+        Assert.Empty(await _operator.Services.GetRequiredService<IPlanningReader>().ListJobsAsync());
+    }
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/robot")]
+    [InlineData("/plans")]
+    [InlineData("/jobs")]
+    [InlineData("/jobs/new")]
+    [InlineData("/orders")]
+    [InlineData("/plan")]
+    public async Task OperatorHost_RedirectsEveryOtherPageToOperator(string path)
+    {
+        var response = await _http.GetAsync(Local(path));
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/operator", response.Headers.Location?.ToString());
+    }
+
+    [Fact]
+    public async Task OperatorHost_ServesOperatorPage() =>
+        Assert.Equal(HttpStatusCode.OK, (await _http.GetAsync(Local("/operator"))).StatusCode);
+
+    [Fact]
+    public async Task OperatorHost_UnknownPath_IsNotFound() =>
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.GetAsync(Local("/does-not-exist"))).StatusCode);
+
+    [Fact]
+    public void ApiKey_ComparesExactly_AndEmptyNeverMatches()
+    {
+        Assert.True(FlexivManager.Api.PlanningApi.KeyMatches(ApiKey, ApiKey));
+        Assert.False(FlexivManager.Api.PlanningApi.KeyMatches(ApiKey + "x", ApiKey));
+        Assert.False(FlexivManager.Api.PlanningApi.KeyMatches("", ""));
     }
 
     // ---- Login -------------------------------------------------------------------------------

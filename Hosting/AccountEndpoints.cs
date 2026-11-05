@@ -39,11 +39,11 @@ public static class AccountEndpoints
 
             if (!valid)
             {
-                events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Warning, "Account", $"Login failed for '{userName}' from {remote}."));
+                events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Warning, "Account", $"Accesso fallito per '{userName}' da {remote}."));
                 await Task.Delay(TimeSpan.FromSeconds(1)); // slows down guessing
                 var error = account.PasswordHash.Length == 0
-                    ? "No editor password configured: planning is read-only."
-                    : "Wrong user name or password.";
+                    ? "Nessuna password di modifica configurata: la pianificazione è in sola lettura."
+                    : "Nome utente o password errati.";
                 return LoginPage(ctx, antiforgery, returnUrl, error, options);
             }
 
@@ -51,7 +51,7 @@ public static class AccountEndpoints
                 [new Claim(ClaimTypes.Name, account.UserName), new Claim(ClaimTypes.Role, Policies.Planner)],
                 CookieAuthenticationDefaults.AuthenticationScheme);
             await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
-            events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Info, "Account", $"'{account.UserName}' logged in from {remote}."));
+            events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Info, "Account", $"'{account.UserName}' ha effettuato l'accesso da {remote}."));
             return Results.LocalRedirect(SafeReturnUrl(returnUrl));
         });
 
@@ -60,7 +60,7 @@ public static class AccountEndpoints
             var name = ctx.User.Identity?.Name;
             await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             if (name is not null)
-                events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Info, "Account", $"'{name}' logged out."));
+                events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Info, "Account", $"'{name}' è uscito."));
             return Results.LocalRedirect("/");
         }).WithMetadata(new RequireAntiforgeryTokenAttribute());
     }
@@ -74,26 +74,26 @@ public static class AccountEndpoints
         var e = (string? s) => WebUtility.HtmlEncode(s ?? "");
         var html = $$"""
             <!DOCTYPE html>
-            <html lang="en" data-bs-theme="dark">
+            <html lang="it" data-bs-theme="dark">
             <head>
               <meta charset="utf-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>Planner login</title>
+              <title>Accesso pianificazione</title>
               <link rel="stylesheet" href="/lib/bootstrap/dist/css/bootstrap.min.css" />
             </head>
             <body class="d-flex align-items-center justify-content-center" style="min-height:100vh">
               <form method="post" action="{{LoginPath}}" class="card p-4" style="width:22rem">
-                <h1 class="h4 mb-3">Planner login</h1>
-                <p class="small text-muted">Required to edit jobs and the work list. Monitoring pages stay open.</p>
+                <h1 class="h4 mb-3">Accesso pianificazione</h1>
+                <p class="small text-muted">Serve per modificare i codici lavoro e gli ordini di produzione. Le pagine di monitoraggio restano aperte.</p>
                 {{(error is null ? "" : $"<div class=\"alert alert-danger py-2\">{e(error)}</div>")}}
                 <input type="hidden" name="{{e(tokens.FormFieldName)}}" value="{{e(tokens.RequestToken)}}" />
                 <input type="hidden" name="returnUrl" value="{{e(SafeReturnUrl(returnUrl))}}" />
-                <label class="form-label" for="userName">User</label>
+                <label class="form-label" for="userName">Utente</label>
                 <input class="form-control mb-2" id="userName" name="userName" value="{{e(options.Editor.UserName)}}" autocomplete="username" />
                 <label class="form-label" for="password">Password</label>
                 <input class="form-control mb-3" id="password" name="password" type="password" autocomplete="current-password" autofocus />
-                <button class="btn btn-primary w-100" type="submit">Log in</button>
-                <a class="small mt-3" href="/">Back</a>
+                <button class="btn btn-primary w-100" type="submit">Accedi</button>
+                <a class="small mt-3" href="/">Indietro</a>
               </form>
             </body>
             </html>

@@ -33,7 +33,7 @@ public sealed class MonitoringHostService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            var message = $"Monitoring host not started on {endpoint.Address}:{endpoint.Port}: {ex.Message}";
+            var message = $"Host di monitoraggio non avviato su {endpoint.Address}:{endpoint.Port}: {ex.Message}";
             logger.LogError(ex, "{Message}", message);
             events.Add(new RobotEvent(time.GetUtcNow(), EventLevel.Error, "Hosting", message));
             await app.DisposeAsync();

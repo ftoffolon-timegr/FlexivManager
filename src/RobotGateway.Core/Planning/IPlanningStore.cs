@@ -1,6 +1,6 @@
 namespace RobotGateway.Core;
 
-/// <summary>Read access to jobs, orders and cycle history (both hosts).</summary>
+/// <summary>Read access to jobs, daily plan rows and cycle history (both hosts).</summary>
 public interface IPlanningReader
 {
     Task<IReadOnlyList<Job>> ListJobsAsync(CancellationToken ct = default);
@@ -11,8 +11,11 @@ public interface IPlanningReader
 
     Task<IReadOnlyList<JobHistoryEntry>> GetJobHistoryAsync(int jobId, CancellationToken ct = default);
 
-    /// <summary>Pending and Active orders in work-list order (Active first, then by position).</summary>
+    /// <summary>Pending and Active rows of every day, by day then position.</summary>
     Task<IReadOnlyList<ProductionOrder>> ListOpenOrdersAsync(CancellationToken ct = default);
+
+    /// <summary>Every row of the work plan of <paramref name="date"/> (any status), by position.</summary>
+    Task<IReadOnlyList<ProductionOrder>> ListPlanAsync(DateOnly date, CancellationToken ct = default);
 
     /// <summary>Completed and Cancelled orders, newest first.</summary>
     Task<IReadOnlyList<ProductionOrder>> ListClosedOrdersAsync(int max, CancellationToken ct = default);
@@ -21,6 +24,8 @@ public interface IPlanningReader
 
     /// <summary>Newest first.</summary>
     Task<IReadOnlyList<CycleRecord>> ListCyclesAsync(int max, CancellationToken ct = default);
+
+    Task<CycleRecord?> GetCycleAsync(long id, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -41,7 +46,7 @@ public interface IPlanningStore : IPlanningReader
     /// <summary>Only Pending orders can be edited.</summary>
     Task<ProductionOrder> UpdateOrderAsync(int id, int expectedVersion, OrderDraft draft, string user, CancellationToken ct = default);
 
-    /// <summary>Swaps a Pending order with the previous (-1) or next (+1) Pending order.</summary>
+    /// <summary>Swaps a Pending row with the previous (-1) or next (+1) Pending row of the same day.</summary>
     Task MoveOrderAsync(int id, int direction, string user, CancellationToken ct = default);
 
     /// <summary>Pending or Active orders only. Does not affect a cycle already running.</summary>
@@ -49,6 +54,12 @@ public interface IPlanningStore : IPlanningReader
 
     /// <summary>Pending -> Active when its first cycle starts. No-op for other statuses.</summary>
     Task MarkOrderActiveAsync(int id, string user, CancellationToken ct = default);
+
+    /// <summary>
+    /// Copies the open rows of <paramref name="from"/> that still have pieces to do into the plan of
+    /// <paramref name="to"/> (quantity = remaining) and closes them as CarriedOver. Returns the rows created.
+    /// </summary>
+    Task<IReadOnlyList<ProductionOrder>> CopyMissingAsync(DateOnly from, DateOnly to, string user, CancellationToken ct = default);
 
     /// <summary>
     /// Stores the cycle; a Completed cycle of an open order increments its count and completes the order

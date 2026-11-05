@@ -30,7 +30,7 @@ public sealed class RobotWorkerTests : IAsyncLifetime
             EnableDelay = TimeSpan.FromMilliseconds(100),
             Plans =
             [
-                new("Short", TimeSpan.FromMilliseconds(300), ["A", "B"]),
+                new("Short", TimeSpan.FromMilliseconds(750), ["A", "B"]),
                 new("Long", TimeSpan.FromSeconds(30), ["A", "B"]),
                 new("Faulty", TimeSpan.FromSeconds(30), ["A"], FaultAfter: TimeSpan.FromMilliseconds(200)),
             ],
@@ -50,9 +50,12 @@ public sealed class RobotWorkerTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        await _db.Store.CreateJobAsync(new JobDraft("SHORT", "Short", 40, null, true), "test");
-        await _db.Store.CreateJobAsync(new JobDraft("LONG", "Long", 100, null, true), "test");
-        await _db.Store.CreateJobAsync(new JobDraft("FAULTY", "Faulty", 100, null, true), "test");
+        await _db.Store.CreateJobAsync(new JobDraft("SHORT", "Short", null, true), "test");
+        await _db.Store.CreateJobAsync(new JobDraft("LONG", "Long", null, true), "test");
+        await _db.Store.CreateJobAsync(new JobDraft("FAULTY", "Faulty", null, true), "test");
+        // Today's work plan: the operator can run only these codes.
+        foreach (var code in new[] { "SHORT", "LONG", "FAULTY" })
+            await _db.Store.CreateOrderAsync(new OrderDraft("", code, 100, null), "test");
         await _recorder.StartAsync(CancellationToken.None);
         await _worker.StartAsync(CancellationToken.None);
     }
@@ -94,9 +97,11 @@ public sealed class RobotWorkerTests : IAsyncLifetime
         await WaitForStateAsync(RobotServiceState.Operational);
     }
 
-    /// <summary>Two-step start: request + confirm.</summary>
+    /// <summary>Two-step start: request + confirm. Without an explicit row, the open row of today with the code.</summary>
     private async Task<CommandResult> StartAsync(string code, int? orderId = null)
     {
+        orderId ??= (await _db.Store.ListPlanAsync(WorkDay.Today(TimeProvider.System)))
+            .First(o => o.IsOpen && o.ProductCode == code).Id;
         var request = await _commands.RequestStartAsync(code, orderId, Source);
         Assert.True(request.IsAccepted, request.Rejection);
         return await _commands.ConfirmAsync(request.Token!, Source);
@@ -141,22 +146,25 @@ public sealed class RobotWorkerTests : IAsyncLifetime
     {
         await WaitForStateAsync(RobotServiceState.Connected);
 
-        Assert.False((await _commands.RequestStartAsync("SHORT", null, Source)).IsAccepted);
+        var row = (await _db.Store.ListPlanAsync(WorkDay.Today(TimeProvider.System))).First(o => o.ProductCode == "SHORT");
+        var request = await _commands.RequestStartAsync("", row.Id, Source);
+        Assert.False(request.IsAccepted);
+        Assert.Contains("richiede", request.Rejection);
         Assert.False(_robot.IsBusy);
     }
 
     // ---- Cycles ------------------------------------------------------------------------------
 
     [Fact]
-    public async Task OneOffCycle_RunsToCompletion_WithJobVelocity()
+    public async Task Cycle_RunsToCompletion_AndCountsForItsRow()
     {
         await EnableAsync();
         await Started("SHORT");
-        Assert.Equal(40, _store.Current.ActiveCycle!.VelocityScale);
+        Assert.Equal("Short", _store.Current.ActiveCycle!.PlanName);
 
         var done = await CycleEnded();
         Assert.Equal(CycleOutcome.Completed, done.LastCycle!.Outcome);
-        Assert.Null(done.LastCycle.OrderId);
+        Assert.NotNull(done.LastCycle.OrderId);
         Assert.Equal(1, done.CompletedCycles);
         Assert.True(await _cycleEvents.WaitIdleAsync(TimeSpan.FromSeconds(2)));
         Assert.Single(await _db.Store.ListCyclesAsync(10));
@@ -242,16 +250,26 @@ public sealed class RobotWorkerTests : IAsyncLifetime
     public async Task EditDuringCycle_AppliesToNextCycle()
     {
         await EnableAsync();
-        await Started("SHORT");
-        var job = (await _db.Store.FindJobByCodeAsync("SHORT"))!;
-        await _db.Store.UpdateJobAsync(job.Id, job.Version, new JobDraft("SHORT", "Short", 70, null, true), "planner");
+        await Started("LONG");
+        var job = (await _db.Store.FindJobByCodeAsync("LONG"))!;
+        await _db.Store.UpdateJobAsync(job.Id, job.Version, new JobDraft("LONG", "Short", null, true), "planner");
 
-        Assert.Equal(40, _store.Current.ActiveCycle?.VelocityScale);
-        await CycleEnded();
+        Assert.Equal("Long", _store.Current.ActiveCycle?.PlanName);
+        await Send(new StopPlanCommand());
         await WaitForStateAsync(RobotServiceState.Operational);
 
-        await Started("SHORT");
-        Assert.Equal(70, _store.Current.ActiveCycle!.VelocityScale);
+        await Started("LONG");
+        Assert.Equal("Short", _store.Current.ActiveCycle!.PlanName);
+    }
+
+    [Fact]
+    public async Task Cycle_ResetsTheRobotVelocityOverride_To100()
+    {
+        await EnableAsync();
+        _robot.SetVelocityScale(30); // left over from Elements or the pendant
+        await Started("LONG");
+
+        Assert.Equal(100, _robot.GetPlanInfo().VelocityScale);
     }
 
     [Fact]
@@ -261,7 +279,7 @@ public sealed class RobotWorkerTests : IAsyncLifetime
         await Started("LONG");
 
         var queued = Enumerable.Range(0, 10)
-            .Select(_ => _commands.SendAsync(new SetVelocityScaleCommand(50), Source))
+            .Select(_ => _commands.SendAsync(new EnableCommand(), Source))
             .ToArray();
         var stop = await _commands.StopAsync(Source);
 
