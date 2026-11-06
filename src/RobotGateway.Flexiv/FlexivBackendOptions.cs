@@ -9,8 +9,8 @@ public sealed class FlexivBackendOptions
     public string SerialNumber { get; set; } = "";
 
     /// <summary>
-    /// RDK version of the native wrapper to load (folder native/rdk-x.y). Must match the robot software:
-    /// 3.10 -> "1.8", 3.11 -> "1.9". RDK refuses to connect on mismatch.
+    /// RDK version of the native wrapper to load: the name of folder native/rdk-&lt;version&gt;. Must match the
+    /// robot software: 3.10 -> "1.8", 3.11.3 -> "1.9.4.1". RDK refuses to connect on mismatch.
     /// </summary>
     public string RdkVersion { get; set; } = "1.8";
 

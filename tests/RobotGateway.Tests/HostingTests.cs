@@ -397,6 +397,17 @@ public sealed partial class HostingTests : IAsyncLifetime
     }
 
     [Fact]
+    public void UnknownRdkVersion_StopsTheStartup()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildOperator(new()
+        {
+            ["Robot:Backend"] = "Flexiv",
+            ["Robot:Flexiv:RdkVersion"] = "9.9",
+        }));
+        Assert.Contains("RdkVersion", ex.Message);
+    }
+
+    [Fact]
     public void UnknownBackend_IsRefused() =>
         Assert.Throws<InvalidOperationException>(() => BuildOperator(new() { ["Robot:Backend"] = "Bogus" }));
 

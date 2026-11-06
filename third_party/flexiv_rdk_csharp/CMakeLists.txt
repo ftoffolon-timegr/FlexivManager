@@ -15,6 +15,15 @@ message(STATUS "Building wrapper against flexiv_rdk ${FLEXIV_RDK_VERSION} (FLEXI
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/install/rdk_install")
 find_package(flexiv_rdk ${FLEXIV_RDK_VERSION} REQUIRED)
 
+# LOCAL CHANGE: spdlog comes with RDK up to 1.9.3; from 1.9.4 RDK is a self-contained DLL without it.
+find_package(spdlog QUIET)
+if(spdlog_FOUND)
+    set(FLEXIV_HAS_SPDLOG 1)
+else()
+    set(FLEXIV_HAS_SPDLOG 0)
+endif()
+message(STATUS "spdlog available to the wrapper: ${FLEXIV_HAS_SPDLOG}")
+
 include(GNUInstallDirs)
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib" CACHE PATH "Archive output dir.")

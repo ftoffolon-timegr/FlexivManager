@@ -14,7 +14,9 @@
 #include <thread>
 #include <algorithm>
 
+#if FLEXIV_HAS_SPDLOG  // LOCAL CHANGE: not available with the self-contained RDK DLL (1.9.4+)
 #include <spdlog\spdlog.h>
+#endif
 #include <flexiv\rdk\data.hpp>
 #include <flexiv\rdk\robot.hpp>
 #include <flexiv\rdk\utility.hpp>

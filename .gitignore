@@ -489,3 +489,6 @@ data/
 
 # Upstream clones used to build the native RDK wrapper
 third_party/_src/
+
+# Native RDK DLLs are part of the repository, whatever a global gitignore says
+!src/RobotGateway.Flexiv/native/**/*.dll

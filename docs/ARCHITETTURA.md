@@ -229,7 +229,7 @@ Schema creato al primo avvio (`EnsureCreated`). Le colonne nuove vengono aggiunt
 | `Robot:Mock:EnableDelay` | 1.5 s | Solo simulatore |
 | `Robot:Backend` | `Mock` | `Mock` = simulatore, `Flexiv` = robot reale |
 | `Robot:Flexiv:SerialNumber` | `Rizon4-062609` | Numero di serie del robot |
-| `Robot:Flexiv:RdkVersion` | `1.8` | Versione della DLL nativa (deve corrispondere al software del robot) |
+| `Robot:Flexiv:RdkVersion` | `1.8` | Nome della cartella `native/rdk-<versione>` (deve corrispondere al software del robot). Se non esiste, il programma si ferma all'avvio con un messaggio chiaro |
 | `Robot:Flexiv:NetworkInterfaces` | vuoto | IP locali da usare per cercare il robot (vuoto = tutte) |
 | `Robot:Flexiv:ClearFaultTimeoutSeconds` | 3 | Attesa massima di ClearFault |
 
@@ -261,7 +261,7 @@ Fonte: tabella ufficiale Flexiv (robot_software_compatibility). Se le versioni n
 | Software robot | flexiv_rdk | Cartella nativa | `Robot:Flexiv:RdkVersion` |
 |----------------|-----------|-----------------|---------------------------|
 | 3.10.x (primo robot di test: Rizon 4-062609, 3.10.3, control box Hesper-062978) | v1.8 | `native/rdk-1.8/` | `1.8` |
-| 3.11.x | v1.9 | `native/rdk-1.9/` | `1.9` |
+| 3.11.3 | v1.9.4.1 | `native/rdk-1.9.4.1/` | `1.9.4.1` |
 
 ### 9.2 File
 
@@ -269,10 +269,10 @@ Fonte: tabella ufficiale Flexiv (robot_software_compatibility). Se le versioni n
 |------|-----------|
 | `third_party/flexiv_rdk_csharp/` | Wrapper ufficiale copiato nel repo, fissato al commit `37a09c2` (Apache 2.0). Origine e modifiche in `README.md` e `LOCAL_CHANGES.md` |
 | `third_party/flexiv_rdk_csharp/FlexivRdk.csproj` | Compila le classi C# del wrapper come libreria |
-| `third_party/build-native.ps1` | Compila la DLL nativa per una versione RDK (x64 Release) e la copia in `src/RobotGateway.Flexiv/native/rdk-x.y/` con `VERSION.txt` |
+| `third_party/build-native.ps1` | Compila la DLL nativa per una versione RDK (x64 Release) e la copia in `src/RobotGateway.Flexiv/native/rdk-<tag>/` con `VERSION.txt` |
 | `src/RobotGateway.Flexiv/FlexivBackend.cs` | `FlexivBackend : IRobotBackend`: solo le funzioni comuni a RDK 1.8 e 1.9 |
 | `src/RobotGateway.Flexiv/FlexivMapping.cs` | Conversioni di enum, stati, plan info ed eventi tra wrapper e Core |
-| `src/RobotGateway.Flexiv/NativeRdkLoader.cs` | Carica la DLL della versione configurata da `native/rdk-x.y/` |
+| `src/RobotGateway.Flexiv/NativeRdkLoader.cs` | Carica le DLL della versione configurata da `native/rdk-<tag>/` e controlla all'avvio che esista |
 | `src/RobotGateway.Flexiv/EventLogCursor.cs` | Restituisce solo le voci nuove del log eventi del robot |
 | `src/RobotGateway.Flexiv/FlexivBackendOptions.cs` | Sezione `Robot:Flexiv` |
 
@@ -288,6 +288,8 @@ Lo script:
 3. compila il wrapper.
 
 Richiede Visual Studio con il carico di lavoro C++ e Git per Windows. Lavora in `%USERPROFILE%\fxrdk`, fuori dal repo.
+
+Dalla v1.9.4 RDK è una DLL precompilata e autosufficiente, scaricata dalla release ufficiale con verifica SHA256: lo script compila solo Eigen e il wrapper, e copia la DLL RDK accanto al wrapper. Le versioni da v1.9.0 a v1.9.3 non sono gestite: compilazione statica con molte più dipendenze, e il wrapper richiede almeno la v1.9.3.
 
 Il wrapper upstream è scritto per RDK 1.9. Le funzioni assenti in 1.8 (`actions`, `reached_timeliness_failure_limit`, `SendMultiCartesianMotionForce`, `Device::enabled`, `Model::SyncKinematicsYAML`, firma di `SetTimelinessFailureLimit`) sono protette dalla macro `FLEXIV_RDK_API`. Il gateway non usa nessuna di queste funzioni.
 

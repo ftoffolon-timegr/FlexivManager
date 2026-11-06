@@ -1,17 +1,20 @@
 <#
 .SYNOPSIS
   Builds the native Flexiv RDK C# wrapper DLL for one RDK version (x64 Release) and copies it to
-  src/RobotGateway.Flexiv/native/rdk-<major.minor>/.
+  src/RobotGateway.Flexiv/native/rdk-<tag>/ (rdk-1.8, rdk-1.9.4.1, ...): <tag> is the value of Robot:Flexiv:RdkVersion.
 
 .DESCRIPTION
   1. Clones flexiv_rdk at the given tag (the static RDK library is downloaded by its CMake with SHA256 check).
   2. Builds its dependencies (Eigen, spdlog, tinyxml2, foonathan_memory, Fast-CDR, Fast-DDS) as static libs.
   3. Installs flexiv_rdk, then builds third_party/flexiv_rdk_csharp against it.
   Needs Visual Studio with the C++ desktop workload (MSVC + CMake) and Git for Windows (bash).
-  Robot software 3.10 -> RDK v1.8, 3.11 -> RDK v1.9 (see the Flexiv compatibility table).
+  Robot software 3.10 -> RDK v1.8, 3.11.3 -> RDK v1.9.4.1 (see the Flexiv compatibility table and release notes).
+  From v1.9.4 RDK is a prebuilt DLL: it is copied next to the wrapper and only Eigen is built. Tags v1.9.0-v1.9.3 are
+  not handled (static build with many more dependencies, and the wrapper needs per-feature guards below v1.9.3).
 
 .EXAMPLE
   ./third_party/build-native.ps1 -RdkTag v1.8
+  ./third_party/build-native.ps1 -RdkTag v1.9.4.1
 #>
 param(
     [string]$RdkTag = "v1.8",
@@ -46,9 +49,11 @@ if (-not $env:CMAKE_POLICY_VERSION_MINIMUM) { $env:CMAKE_POLICY_VERSION_MINIMUM 
 # Long paths for the clones made by the dependency scripts, without touching the user's git config.
 $env:GIT_CONFIG_COUNT = "1"; $env:GIT_CONFIG_KEY_0 = "core.longpaths"; $env:GIT_CONFIG_VALUE_0 = "true"
 
-$rdkSrc = Join-Path $WorkDir "flexiv_rdk-$version"
-$install = Join-Path $WorkDir "install-$version"
-$wrapperBuild = Join-Path $WorkDir "wrapper-build-$version"
+# Work folders use the full tag (v1.8 -> 1.8, v1.9.4.1 -> 1.9.4.1): a different patch release must not reuse them.
+$tagName = $RdkTag.TrimStart("v")
+$rdkSrc = Join-Path $WorkDir "flexiv_rdk-$tagName"
+$install = Join-Path $WorkDir "install-$tagName"
+$wrapperBuild = Join-Path $WorkDir "wrapper-build-$tagName"
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
 
 function Step($message) { Write-Host ">>> $message" -ForegroundColor Cyan }
@@ -99,7 +104,10 @@ if (-not (Test-Path $rdkSrc)) {
     Run git @("clone", "--branch", $RdkTag, "--depth", "1", "https://github.com/flexivrobotics/flexiv_rdk.git", $rdkSrc)
 }
 
-if (-not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
+# Dependencies are built once. The marker covers versions with only Eigen; fastrtps is an RDK 1.8 install made
+# before the marker existed.
+$depsMarker = Join-Path $install "deps-installed.txt"
+if (-not (Test-Path $depsMarker) -and -not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
     Step "Building RDK dependencies into $install (several minutes)"
     $cloned = Join-Path $rdkSrc "thirdparty\cloned"
     for ($attempt = 1; ; $attempt++) {
@@ -118,8 +126,12 @@ if (-not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
         Use-PinnedDependency $cloned "eigen" $EigenUrl $EigenTag $EigenCommit
         # tinyxml2: forces policy CMP0063 to OLD, which CMake 4 refuses. install_tinyxml2.sh only checks out the
         # same tag (no reset), so the patched working tree is kept.
-        Use-PinnedDependency $cloned "tinyxml2" "https://github.com/leethomason/tinyxml2.git" "8.0.0" `
-            "bf15233ad88390461f6ab0dbcf046cce643c5fcb" (Join-Path $PSScriptRoot "patches\tinyxml2-8.0.0-cmake4.patch")
+        # Only tags that still pin 8.0.0 need it (v1.9.4.1 has no tinyxml2 at all).
+        $tinyxml2Script = Join-Path $rdkSrc "thirdparty\scripts\install_tinyxml2.sh"
+        if ((Test-Path $tinyxml2Script) -and (Select-String $tinyxml2Script -Pattern "^VER_TAG=8\.0\.0" -Quiet)) {
+            Use-PinnedDependency $cloned "tinyxml2" "https://github.com/leethomason/tinyxml2.git" "8.0.0" `
+                "bf15233ad88390461f6ab0dbcf046cce643c5fcb" (Join-Path $PSScriptRoot "patches\tinyxml2-8.0.0-cmake4.patch")
+        }
 
         Push-Location (Join-Path $rdkSrc "thirdparty")
         try {
@@ -127,7 +139,10 @@ if (-not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
             $exit = $LASTEXITCODE
         }
         finally { Pop-Location }
-        if ($exit -eq 0) { break }
+        if ($exit -eq 0) {
+            Set-Content $depsMarker "Dependencies of flexiv_rdk $RdkTag installed." -Encoding ascii
+            break
+        }
         # Dependencies are cloned from GitHub/GitLab, which sometimes refuse requests under load.
         if ($attempt -ge $Retries) { throw "Dependency build failed $attempt times (exit code $exit). Retry later." }
         Write-Host "Dependency build failed (exit code $exit), retrying in $RetryDelaySeconds s ($attempt/$Retries)..." -ForegroundColor Yellow
@@ -145,13 +160,21 @@ Run cmake @("--build", $wrapperBuild, "--config", "Release", "-j", "$Jobs")
 
 $dll = Get-ChildItem $wrapperBuild -Recurse -Filter "flexiv_rdk.win64-vs2019.dll" | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
 if (-not $dll) { throw "Wrapper DLL not found under $wrapperBuild" }
-$target = Join-Path $repo "src\RobotGateway.Flexiv\native\rdk-$version"
+$target = Join-Path $repo "src\RobotGateway.Flexiv\native\rdk-$tagName"
 New-Item -ItemType Directory -Force $target | Out-Null
 Copy-Item $dll.FullName $target -Force
+# From RDK 1.9.4 the wrapper depends on the RDK DLL, which must stay next to it under the name the wrapper imports.
+$rdkRuntime = @((Join-Path $install "bin\flexiv_rdk.dll"), (Join-Path $rdkSrc "build\flexiv_rdk.win_amd64.dll")) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($rdkRuntime) {
+    $dumpbin = Get-ChildItem (Join-Path $vs "VC\Tools\MSVC") -Recurse -Filter dumpbin.exe | Where-Object FullName -Match "Hostx64\\x64" | Select-Object -First 1
+    $imports = & $dumpbin.FullName /dependents $dll.FullName | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^flexiv_rdk.*\.dll$" }
+    if (-not $imports) { throw "The wrapper does not import the RDK DLL: unexpected for $RdkTag." }
+    foreach ($import in $imports) { Copy-Item $rdkRuntime (Join-Path $target $import) -Force }
+}
 
 $rdkCommit = (git -C $rdkSrc rev-parse HEAD).Trim()
 $wrapperCommit = "37a09c2700d668365324dcde85fac23e6ba08ddf (+ local changes, see third_party/flexiv_rdk_csharp/LOCAL_CHANGES.md)"
-$sha = (Get-FileHash (Join-Path $target $dll.Name) -Algorithm SHA256).Hash
+$sha = (Get-ChildItem $target -Filter *.dll | ForEach-Object { "$($_.Name)=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }) -join " "
 @"
 flexiv_rdk        : $RdkTag ($rdkCommit)
 flexiv_rdk_csharp : $wrapperCommit

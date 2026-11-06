@@ -96,7 +96,7 @@ public class FlexivBackendTests
     [Fact]
     public void NativeDll_ForRdk18_LoadsAndExportsTheUsedFunctions()
     {
-        var dll = Path.Combine(NativeRdkLoader.FolderFor("1.8"), NativeRdkLoader.DllName);
+        var dll = Path.Combine(NativeRdkVersions.FolderFor("1.8"), NativeRdkVersions.WrapperDll);
         if (!File.Exists(dll))
             return; // not built on this machine (third_party/build-native.ps1)
 
@@ -107,6 +107,21 @@ public class FlexivBackendTests
                      "GetPlanList", "GetPlanInfo", "ExecutePlanByName", "PausePlan", "StopPlan", "Stop", "Enable",
                      "ClearFault", "SwitchMode", "SetVelocityScale", "GetEventLog" })
             Assert.True(System.Runtime.InteropServices.NativeLibrary.TryGetExport(handle, export, out _), export);
+    }
+
+    [Fact]
+    public void InstalledVersions_ListTheNativeFolders()
+    {
+        Assert.Contains("1.8", NativeRdkVersions.Installed());
+        NativeRdkVersions.EnsureInstalled("1.8");
+    }
+
+    [Fact]
+    public void UnknownRdkVersion_GivesAClearError()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => NativeRdkVersions.EnsureInstalled("9.9"));
+        Assert.Contains("9.9", ex.Message);
+        Assert.Contains("1.8", ex.Message); // lists what is available
     }
 
     [Fact]

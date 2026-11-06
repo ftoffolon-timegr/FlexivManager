@@ -30,7 +30,7 @@ In Visual Studio lo stesso publish c'è come profilo **win-x64** (Pubblica), con
 - Windows 11 x64, un utente amministratore.
 - Due schede di rete consigliate: una sulla **rete aziendale** (monitoraggio, gestionale) e una sulla **rete del robot** (IP statico, es. `192.168.2.150`).
 - Robot: in Flexiv Elements abilitare il **controllo remoto (RDK)** prima di usare il robot reale.
-- La versione RDK deve corrispondere al software del robot: 3.10.x → `1.8`, 3.11.x → `1.9` (nel pacchetto c'è solo la cartella `native\rdk-1.8\`, salvo diversa compilazione).
+- La versione RDK deve corrispondere al software del robot: 3.10.x → `1.8`, 3.11.3 → `1.9.4.1`. Nel pacchetto entrano le cartelle `native\rdk-*\` presenti al momento della creazione.
 
 ## 3. Prima installazione
 
@@ -61,7 +61,7 @@ Parametri principali:
 | `-MonitoringPort` | `8090` | porta del monitoraggio |
 | `-FirewallRemoteAddress` | `Any` | chi può collegarsi: `LocalSubnet`, oppure IP/subnet separati da virgola |
 | `-RobotSerial` | vuoto | numero di serie del robot. **Vuoto = simulatore.** |
-| `-RdkVersion` | `1.8` | `1.8` (robot 3.10.x) o `1.9` (3.11.x) |
+| `-RdkVersion` | `1.8` | `1.8` (robot 3.10.x) o `1.9.4.1` (3.11.3) |
 | `-RobotNetworkInterface` | vuoto | IP di questo PC sulla rete del robot |
 | `-ErpImportFolder` | `data\erp-import` | cartella in cui il gestionale scrive i file dei codici |
 | `-ApiKey` | generata | chiave `X-Api-Key` dell'API REST di scrittura |
@@ -189,6 +189,6 @@ Errori tipici:
 |---|---|
 | Il servizio si ferma subito | `appsettings.Production.json` non valido (JSON) o porta già occupata: vedi Visualizzatore eventi |
 | Monitoraggio non raggiungibile dall'ufficio | IP sbagliato in `Hosts:Monitoring:Address`, firewall, profilo di rete Pubblico sulla scheda aziendale |
-| "Wrapper nativo RDK non trovato" / "Impossibile caricare" | manca `native\rdk-x.y\` per la `RdkVersion` scelta, oppure manca il runtime Visual C++ x64 |
+| "versione non installata" / "Wrapper nativo RDK non trovato" / "Impossibile caricare" | manca `native\rdk-<versione>\` per la `RdkVersion` scelta, oppure manca il runtime Visual C++ x64 |
 | Robot non connesso | controllo remoto non abilitato in Elements, numero di serie, versione RDK, scheda di rete del robot |
 | File del gestionale non letti | permessi dell'account del servizio sulla condivisione (§4) |

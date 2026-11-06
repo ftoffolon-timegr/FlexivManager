@@ -4,6 +4,7 @@ EXPORT_API void FreeString(const char* ptr) {
 	delete[] ptr;
 }
 
+#if FLEXIV_HAS_SPDLOG
 EXPORT_API void SpdlogInfo(const char* msgs) {
 	spdlog::info(std::string(msgs));
 }
@@ -15,6 +16,19 @@ EXPORT_API void SpdlogWarn(const char* msgs) {
 EXPORT_API void SpdlogError(const char* msgs) {
 	spdlog::error(std::string(msgs));
 }
+#else  // LOCAL CHANGE: plain console output, the exports must stay for the C# wrapper
+EXPORT_API void SpdlogInfo(const char* msgs) {
+	std::cout << "[info] " << msgs << std::endl;
+}
+
+EXPORT_API void SpdlogWarn(const char* msgs) {
+	std::cout << "[warning] " << msgs << std::endl;
+}
+
+EXPORT_API void SpdlogError(const char* msgs) {
+	std::cerr << "[error] " << msgs << std::endl;
+}
+#endif
 
 EXPORT_API Robot* CreateFlexivRobot(const char* robot_sn,
 	const char** interfaces, int interface_count, int verbose, int lite, FlexivError* error) {

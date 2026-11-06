@@ -6,7 +6,7 @@ PRIVATE
     include/)
 target_link_libraries(${PROJECT_NAME} PRIVATE flexiv::flexiv_rdk)
 # LOCAL CHANGE: lets wrapper_api.cpp skip exports that do not exist in older RDK versions.
-target_compile_definitions(${PROJECT_NAME} PRIVATE FLEXIV_RDK_API=${FLEXIV_RDK_API})
+target_compile_definitions(${PROJECT_NAME} PRIVATE FLEXIV_RDK_API=${FLEXIV_RDK_API} FLEXIV_HAS_SPDLOG=${FLEXIV_HAS_SPDLOG})
 
 if (MSVC)
     target_compile_definitions(${PROJECT_NAME}

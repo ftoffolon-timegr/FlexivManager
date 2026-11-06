@@ -156,6 +156,8 @@ public static class GatewayComposition
         if (backend.Equals("Flexiv", StringComparison.OrdinalIgnoreCase))
         {
             services.AddOptions<FlexivBackendOptions>().Bind(configuration.GetSection(FlexivBackendOptions.SectionName));
+            var flexivOptions = configuration.GetSection(FlexivBackendOptions.SectionName).Get<FlexivBackendOptions>() ?? new();
+            NativeRdkVersions.EnsureInstalled(flexivOptions.RdkVersion);
             services.AddSingleton<IRobotBackend>(sp => new FlexivBackend(sp.GetRequiredService<IOptions<FlexivBackendOptions>>().Value));
         }
         else if (backend.Equals("Mock", StringComparison.OrdinalIgnoreCase))
