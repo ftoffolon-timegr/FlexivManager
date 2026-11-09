@@ -30,7 +30,7 @@ In Visual Studio lo stesso publish c'è come profilo **win-x64** (Pubblica), con
 - Windows 11 x64, un utente amministratore.
 - Due schede di rete consigliate: una sulla **rete aziendale** (monitoraggio, gestionale) e una sulla **rete del robot** (IP statico, es. `192.168.2.150`).
 - Robot: in Flexiv Elements abilitare il **controllo remoto (RDK)** prima di usare il robot reale.
-- La versione RDK deve corrispondere al software del robot: 3.10.x → `1.8`, 3.11.3 → `1.9.4.1`. Nel pacchetto entrano le cartelle `native\rdk-*\` presenti al momento della creazione.
+- La versione RDK deve corrispondere al software del robot: 3.10.x → `1.8`, 3.11.1 → `1.9.2`, 3.11.3 → `1.9.4.1`. Nel pacchetto entrano le cartelle `native\rdk-*\` presenti al momento della creazione.
 
 ## 3. Prima installazione
 
@@ -61,7 +61,7 @@ Parametri principali:
 | `-MonitoringPort` | `8090` | porta del monitoraggio |
 | `-FirewallRemoteAddress` | `Any` | chi può collegarsi: `LocalSubnet`, oppure IP/subnet separati da virgola |
 | `-RobotSerial` | vuoto | numero di serie del robot. **Vuoto = simulatore.** |
-| `-RdkVersion` | `1.8` | `1.8` (robot 3.10.x) o `1.9.4.1` (3.11.3) |
+| `-RdkVersion` | `1.8` | `1.8` (robot 3.10.x), `1.9.2` (3.11.1) o `1.9.4.1` (3.11.3) |
 | `-RobotNetworkInterface` | vuoto | IP di questo PC sulla rete del robot |
 | `-ErpImportFolder` | `data\erp-import` | cartella in cui il gestionale scrive i file dei codici |
 | `-ApiKey` | generata | chiave `X-Api-Key` dell'API REST di scrittura |

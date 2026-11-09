@@ -10,7 +10,7 @@ public sealed class FlexivBackendOptions
 
     /// <summary>
     /// RDK version of the native wrapper to load: the name of folder native/rdk-&lt;version&gt;. Must match the
-    /// robot software: 3.10 -> "1.8", 3.11.3 -> "1.9.4.1". RDK refuses to connect on mismatch.
+    /// robot software: 3.10 -> "1.8", 3.11.1 -> "1.9.2", 3.11.3 -> "1.9.4.1". RDK refuses to connect on mismatch.
     /// </summary>
     public string RdkVersion { get; set; } = "1.8";
 

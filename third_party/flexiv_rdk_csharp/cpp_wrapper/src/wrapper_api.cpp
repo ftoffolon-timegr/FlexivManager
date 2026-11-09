@@ -145,7 +145,7 @@ EXPORT_API void GetStates(Robot* robot, WRobotState* robot_state, FlexivError* e
 
 EXPORT_API void GetActions(Robot* robot, WRobotActions* robot_actions, FlexivError* error) {
     try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: Robot::actions() does not exist before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: Robot::actions() does not exist before RDK 1.9
         throw std::runtime_error("GetActions requires flexiv_rdk 1.9 or later");
 #else
         const RobotActions& actions = robot->actions();
@@ -221,7 +221,7 @@ EXPORT_API int IsEstopReleased(Robot* robot) {
 }
 
 EXPORT_API int ReachedTimelinessFailureLimit(Robot* robot) {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: not available before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: not available before RDK 1.9
 	return 0;
 #else
 	return robot->reached_timeliness_failure_limit();
@@ -369,7 +369,7 @@ EXPORT_API void SyncWithPositioner(Robot* robot, int toggle, FlexivError* error)
 
 EXPORT_API void SetTimelinessFailureLimit(Robot* robot, double limit, FlexivError* error) {
 	try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: RDK 1.8 takes a failure count, 1.9 a percentage
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: RDK 1.8 takes a failure count, 1.9 a percentage
 		robot->SetTimelinessFailureLimit(static_cast<unsigned int>(limit));
 #else
 		robot->SetTimelinessFailureLimit(limit);
@@ -532,7 +532,7 @@ EXPORT_API void StreamJointTorque(Robot* robot, const double* pos, int posLen,
 	int enableGravityComp, int enableSoftLimits, double frictionCompScale, FlexivError* error) {
 	try {
 		std::vector<double> positions(pos, pos + posLen);
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: RDK 1.8 has no friction compensation argument (ignored)
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: RDK 1.8 has no friction compensation argument (ignored)
 		(void)frictionCompScale;
 		robot->StreamJointTorque(positions, enableGravityComp, enableSoftLimits);
 #else
@@ -691,8 +691,8 @@ EXPORT_API void SendMultiCartesianMotionForce(Robot* robot,
     int waypointCount,
     FlexivError* error) {
     try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: SendMultiCartesianMotionForce does not exist before RDK 1.9
-        throw std::runtime_error("SendMultiCartesianMotionForce requires flexiv_rdk 1.9 or later");
+#if FLEXIV_RDK_API < 10903  // LOCAL CHANGE: SendMultiCartesianMotionForce / NrtCartesianCmd exist from RDK 1.9.3
+        throw std::runtime_error("SendMultiCartesianMotionForce requires flexiv_rdk 1.9.3 or later");
 #else
         if (waypointCount <= 0) {
             throw std::invalid_argument("SendMultiCartesianMotionForce waypoint count must be positive");
@@ -1362,7 +1362,7 @@ EXPORT_API void DownloadProject(FileIO* fileIO, const char* projectName, const c
 
 EXPORT_API void DownloadCollisionMesh(FileIO* fileIO, const char* saveDir, FlexivError* error) {
 	try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: not available before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: not available before RDK 1.9
 		throw std::runtime_error("DownloadCollisionMesh requires flexiv_rdk 1.9 or later");
 #else
 		fileIO->DownloadCollisionMesh(saveDir);
@@ -1422,7 +1422,7 @@ EXPORT_API int HasDevice(Device* device, const char* name, FlexivError* error) {
 
 EXPORT_API int DeviceEnabled(Device* device, const char* name, FlexivError* error) {
 	try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: Device::enabled() does not exist before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: Device::enabled() does not exist before RDK 1.9
 		throw std::runtime_error("DeviceEnabled requires flexiv_rdk 1.9 or later");
 #else
 		int flag = device->enabled(name);
@@ -1439,7 +1439,7 @@ EXPORT_API int DeviceEnabled(Device* device, const char* name, FlexivError* erro
 
 EXPORT_API int DeviceConnected(Device* device, const char* name, FlexivError* error) {
 	try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: Device::connected() does not exist before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: Device::connected() does not exist before RDK 1.9
 		throw std::runtime_error("DeviceConnected requires flexiv_rdk 1.9 or later");
 #else
 		int flag = device->connected(name);
@@ -1640,7 +1640,7 @@ EXPORT_API void SetJointVelocityReducedLimits(Safety* safetyPtr, double* maxVel,
 EXPORT_API void SetJointOutputTorqueRegulator(Safety* safetyPtr, double limitingFactor,
 	int errorThreshold, FlexivError* error) {
 	try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: not available before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: not available before RDK 1.9
 		throw std::runtime_error("SetJointOutputTorqueRegulator requires flexiv_rdk 1.9 or later");
 #else
 		safetyPtr->SetJointOutputTorqueRegulator(limitingFactor, errorThreshold);
@@ -1805,7 +1805,7 @@ EXPORT_API void SyncURDF(Model* model, char* path, FlexivError* error) {
 
 EXPORT_API int SyncKinematicsYAML(Model* model, char* path, FlexivError* error) {
 	try {
-#if FLEXIV_RDK_API < 109  // LOCAL CHANGE: Model::SyncKinematicsYAML() does not exist before RDK 1.9
+#if FLEXIV_RDK_API < 10900  // LOCAL CHANGE: Model::SyncKinematicsYAML() does not exist before RDK 1.9
 		throw std::runtime_error("SyncKinematicsYAML requires flexiv_rdk 1.9 or later");
 #else
 		int ret = model->SyncKinematicsYAML(std::string(path));

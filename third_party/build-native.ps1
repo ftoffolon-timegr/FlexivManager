@@ -5,16 +5,19 @@
 
 .DESCRIPTION
   1. Clones flexiv_rdk at the given tag (the static RDK library is downloaded by its CMake with SHA256 check).
-  2. Builds its dependencies (Eigen, spdlog, tinyxml2, foonathan_memory, Fast-CDR, Fast-DDS) as static libs.
+  2. Builds its dependencies (v1.8: Eigen, spdlog, tinyxml2, foonathan_memory, Fast-CDR, Fast-DDS, static;
+     v1.9.0-1.9.3: the same plus yaml-cpp, Boost, SpaceVecAlg, RBDyn, as DLLs; v1.9.4+: Eigen only).
   3. Installs flexiv_rdk, then builds third_party/flexiv_rdk_csharp against it.
   Needs Visual Studio with the C++ desktop workload (MSVC + CMake) and Git for Windows (bash).
   Robot software 3.10 -> RDK v1.8, 3.11.3 -> RDK v1.9.4.1 (see the Flexiv compatibility table and release notes).
   From v1.9.4 RDK is a prebuilt DLL: it is copied next to the wrapper and only Eigen is built. Tags v1.9.0-v1.9.3 are
-  not handled (static build with many more dependencies, and the wrapper needs per-feature guards below v1.9.3).
+  not tested beyond v1.9.2 (robot 3.11.1): they build their dependencies (also Boost, RBDyn, yaml-cpp) as DLLs, which
+  are copied next to the wrapper. The wrapper needs at least v1.9.2 within 1.9 (actions()).
 
 .EXAMPLE
   ./third_party/build-native.ps1 -RdkTag v1.8
-  ./third_party/build-native.ps1 -RdkTag v1.9.4.1
+  ./third_party/build-native.ps1 -RdkTag v1.9.2      # robot software 3.11.1
+  ./third_party/build-native.ps1 -RdkTag v1.9.4.1    # robot software 3.11.3
 #>
 param(
     [string]$RdkTag = "v1.8",
@@ -155,7 +158,7 @@ Run cmake @("-S", $rdkSrc, "-B", (Join-Path $rdkSrc "build"), "-DCMAKE_PREFIX_PA
 Run cmake @("--build", (Join-Path $rdkSrc "build"), "--target", "install", "--config", "Release", "-j", "$Jobs")
 
 Step "Building the C# wrapper DLL against RDK $version"
-Run cmake @("-S", (Join-Path $PSScriptRoot "flexiv_rdk_csharp"), "-B", $wrapperBuild, "-DFLEXIV_RDK_VERSION=$version", "-DCMAKE_PREFIX_PATH=$install")
+Run cmake @("-S", (Join-Path $PSScriptRoot "flexiv_rdk_csharp"), "-B", $wrapperBuild, "-DFLEXIV_RDK_VERSION=$tagName", "-DCMAKE_PREFIX_PATH=$install")
 Run cmake @("--build", $wrapperBuild, "--config", "Release", "-j", "$Jobs")
 
 $dll = Get-ChildItem $wrapperBuild -Recurse -Filter "flexiv_rdk.win64-vs2019.dll" | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
@@ -163,14 +166,30 @@ if (-not $dll) { throw "Wrapper DLL not found under $wrapperBuild" }
 $target = Join-Path $repo "src\RobotGateway.Flexiv\native\rdk-$tagName"
 New-Item -ItemType Directory -Force $target | Out-Null
 Copy-Item $dll.FullName $target -Force
-# From RDK 1.9.4 the wrapper depends on the RDK DLL, which must stay next to it under the name the wrapper imports.
+# Runtime DLLs the wrapper needs besides Windows and the VC++ runtime: RDK 1.9.0-1.9.3 build their dependencies as
+# shared libraries (Fast-DDS, spdlog, yaml-cpp, RBDyn, ...), from 1.9.4 RDK itself is a DLL. Every DLL the wrapper
+# imports, directly or through another copied DLL, that exists in the RDK install is copied next to it.
+Get-ChildItem $target -Filter *.dll | Where-Object Name -ne $dll.Name | Remove-Item -Force   # stale from a previous build
+$dumpbin = Get-ChildItem (Join-Path $vs "VC\Tools\MSVC") -Recurse -Filter dumpbin.exe | Where-Object FullName -Match "Hostx64\\x64" | Select-Object -First 1
+$searchDirs = @((Join-Path $install "bin"), (Join-Path $install "lib"), (Join-Path $rdkSrc "build")) | Where-Object { Test-Path $_ }
 $rdkRuntime = @((Join-Path $install "bin\flexiv_rdk.dll"), (Join-Path $rdkSrc "build\flexiv_rdk.win_amd64.dll")) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($rdkRuntime) {
-    $dumpbin = Get-ChildItem (Join-Path $vs "VC\Tools\MSVC") -Recurse -Filter dumpbin.exe | Where-Object FullName -Match "Hostx64\\x64" | Select-Object -First 1
-    $imports = & $dumpbin.FullName /dependents $dll.FullName | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^flexiv_rdk.*\.dll$" }
-    if (-not $imports) { throw "The wrapper does not import the RDK DLL: unexpected for $RdkTag." }
-    foreach ($import in $imports) { Copy-Item $rdkRuntime (Join-Path $target $import) -Force }
+$copied = [System.Collections.Generic.List[string]]::new()
+$queue = [System.Collections.Generic.Queue[string]]::new()
+$queue.Enqueue((Join-Path $target $dll.Name))
+while ($queue.Count -gt 0) {
+    $file = $queue.Dequeue()
+    $imports = & $dumpbin.FullName /dependents $file | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "^\S+\.dll$" }
+    foreach ($import in $imports) {
+        if ($copied.Contains($import)) { continue }
+        $source = $searchDirs | ForEach-Object { Get-ChildItem $_ -Recurse -Filter $import -ErrorAction SilentlyContinue } | Select-Object -First 1 -ExpandProperty FullName
+        if (-not $source -and $import -like "flexiv_rdk*" -and $rdkRuntime) { $source = $rdkRuntime }  # RDK DLL under its import name
+        if (-not $source) { continue }   # Windows / VC++ runtime
+        Copy-Item $source (Join-Path $target $import) -Force
+        $copied.Add($import)
+        $queue.Enqueue((Join-Path $target $import))
+    }
 }
+Write-Host "Runtime DLLs copied next to the wrapper: $(if ($copied.Count) { $copied -join ', ' } else { 'none' })"
 
 $rdkCommit = (git -C $rdkSrc rev-parse HEAD).Trim()
 $wrapperCommit = "37a09c2700d668365324dcde85fac23e6ba08ddf (+ local changes, see third_party/flexiv_rdk_csharp/LOCAL_CHANGES.md)"
@@ -179,6 +198,7 @@ $sha = (Get-ChildItem $target -Filter *.dll | ForEach-Object { "$($_.Name)=$((Ge
 flexiv_rdk        : $RdkTag ($rdkCommit)
 flexiv_rdk_csharp : $wrapperCommit
 built             : $(Get-Date -Format "yyyy-MM-dd HH:mm") on $env:COMPUTERNAME, MSVC from $vs
+runtime dlls      : $(if ($copied.Count) { $copied -join ', ' } else { 'none' })
 dll sha256        : $sha
 "@ | Set-Content (Join-Path $target "VERSION.txt") -Encoding utf8
 

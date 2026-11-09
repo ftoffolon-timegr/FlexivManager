@@ -36,7 +36,7 @@ param(
 
     # Numero di serie del robot (es. "Rizon10-012345"). Vuoto = simulatore (Robot:Backend = Mock).
     [string]$RobotSerial = '',
-    [ValidateSet('1.8', '1.9.4.1')]
+    [ValidateSet('1.8', '1.9.2', '1.9.4.1')]
     [string]$RdkVersion = '1.8',
     # IP di questo PC sulla rete del robot (facoltativo).
     [string]$RobotNetworkInterface = '',
