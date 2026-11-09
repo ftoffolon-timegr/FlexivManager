@@ -129,6 +129,24 @@ if (-not (Test-Path $depsMarker) -and -not (Test-Path (Join-Path $install "lib\c
         if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { throw "cl.exe not found after $vcvars." }
         # Our CMake must stay first in PATH (vcvars puts its own copy there too, which is the same one).
         $env:PATH = "$cmakeBin;$env:PATH"
+
+        # b2 1.83 recognizes the compiler version only from paths like MSVC\14.3x: with VS 2026 (MSVC\14.5x) it
+        # falls back to "msvc-6.0" with no usable commands. Declare it as 14.3 with this cl.exe; b2 then finds
+        # vcvarsall.bat from the compiler path. The "using msvc ;" written by bootstrap reuses this configuration.
+        $cl = (Get-Command cl.exe).Source -replace "\\", "/"
+        $userConfig = Join-Path $WorkDir "boost-user-config.jam"
+        $vcvarsall = (Join-Path $vs "VC\Auxiliary\Build\vcvarsall.bat") -replace "\\", "/"   # b2 would look in VC\Tools\Auxiliary
+        Set-Content $userConfig "using msvc : 14.3 : `"$cl`" : <setup>`"$vcvarsall`" ;" -Encoding ascii
+        $env:BOOST_BUILD_USER_CONFIG = $userConfig
+        Write-Host "Boost: b2 toolset msvc-14.3 = $cl ($userConfig)"
+        # A failed b2 run caches its wrong configuration (32-bit, arm, msvc-6.0): start the Boost build clean.
+        $boostDir = Join-Path $rdkSrc "thirdparty\cloned\boost_1_83_0"
+        if ((Test-Path $boostDir) -and -not (Get-ChildItem (Join-Path $install "lib") -Filter "boost_system*" -ErrorAction SilentlyContinue)) {
+            foreach ($stale in "bin.v2", "project-config.jam") {
+                $path = Join-Path $boostDir $stale
+                if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+            }
+        }
     }
     $cloned = Join-Path $rdkSrc "thirdparty\cloned"
     for ($attempt = 1; ; $attempt++) {
