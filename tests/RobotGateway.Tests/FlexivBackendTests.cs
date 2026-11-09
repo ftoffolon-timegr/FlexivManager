@@ -94,13 +94,15 @@ public class FlexivBackendTests
     }
 
     [Fact]
-    public void NativeDll_ForRdk18_LoadsAndExportsTheUsedFunctions()
+    public void NativeDll_LoadsAndExportsTheUsedFunctions()
     {
-        var dll = Path.Combine(NativeRdkVersions.FolderFor("1.8"), NativeRdkVersions.WrapperDll);
+        // One RDK version per process: 1.8 by default, another one with FLEXIV_TEST_RDK_VERSION (e.g. 1.9.2).
+        var version = Environment.GetEnvironmentVariable("FLEXIV_TEST_RDK_VERSION") is { Length: > 0 } v ? v : "1.8";
+        var dll = Path.Combine(NativeRdkVersions.FolderFor(version), NativeRdkVersions.WrapperDll);
         if (!File.Exists(dll))
             return; // not built on this machine (third_party/build-native.ps1)
 
-        NativeRdkLoader.EnsureLoaded("1.8"); // load only: no robot object, no network
+        NativeRdkLoader.EnsureLoaded(version); // load only, with its runtime DLLs: no robot object, no network
 
         var handle = System.Runtime.InteropServices.NativeLibrary.Load(dll);
         foreach (var export in new[] { "CreateFlexivRobot", "IsConnected", "IsOperational", "IsBusy", "GetStates",
