@@ -7,6 +7,19 @@ public class RobotStateMachineTests
     private static readonly BackendStatus Ready = new(
         Connected: true, Operational: true, OperationalStatus.Ready, Fault: false, EStopReleased: true, Busy: false, RobotMode.Idle);
 
+    [Theory]
+    [InlineData(true, OperationalStatus.Ready, RemoteMode.Remote)]
+    [InlineData(false, OperationalStatus.InManualMode, RemoteMode.NotRemote)]
+    [InlineData(false, OperationalStatus.InAutoMode, RemoteMode.NotRemote)]
+    [InlineData(false, OperationalStatus.NotEnabled, RemoteMode.Unknown)]
+    [InlineData(false, OperationalStatus.MinorFault, RemoteMode.Unknown)]
+    public void RemoteMode_FollowsTheOperationalStatus(bool operational, OperationalStatus status, RemoteMode expected) =>
+        Assert.Equal(expected, (Ready with { Operational = operational, OperationalStatus = status }).RemoteMode);
+
+    [Fact]
+    public void RemoteMode_IsUnknown_WhenNotConnected() =>
+        Assert.Equal(RemoteMode.Unknown, BackendStatus.Disconnected.RemoteMode);
+
     [Fact]
     public void Disconnected_WhenNotConnected() =>
         Assert.Equal(RobotServiceState.Disconnected, RobotStateMachine.Derive(BackendStatus.Disconnected, false));

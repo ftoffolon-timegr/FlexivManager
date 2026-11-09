@@ -42,6 +42,7 @@ public sealed class RobotWorker(
     private CycleRecord? _lastCycle;
     private long _completedCycles;
     private string? _lastError;
+    private string? _robotFault;
     private long _sequence;
     private double _loopRateHz;
 
@@ -271,7 +272,7 @@ public sealed class RobotWorker(
                     FinishCycle(CycleOutcome.Failed, "Il plan non è partito.");
                 break;
             default:
-                FinishCycle(CycleOutcome.Failed, $"{Labels.Of(_state)} durante il ciclo.");
+                FinishCycle(CycleOutcome.Failed, $"{Labels.Of(_state)} durante il ciclo" + (_robotFault is null ? "." : $": {_robotFault}"));
                 break;
         }
     }
@@ -387,7 +388,11 @@ public sealed class RobotWorker(
                 if (status.Mode == RobotMode.NrtPlanExecution)
                     plan = backend.GetPlanInfo();
                 foreach (var e in backend.DrainEventLog())
+                {
                     events.Add(e);
+                    if (e.Level == EventLevel.Error)
+                        _robotFault = RobotFaultText.Extract(e.Message);
+                }
             }
             catch (Exception ex)
             {
@@ -405,6 +410,11 @@ public sealed class RobotWorker(
         if (!RobotStateMachine.CanStayPaused(status))
             _pauseLatched = false;
 
+        // Auto (Remote) is selected on the robot, not by this service: log when it is lost or regained.
+        if (status.RemoteMode != _status.RemoteMode && status.RemoteMode != RemoteMode.Unknown)
+            AddEvent(status.RemoteMode == RemoteMode.Remote ? EventLevel.Info : EventLevel.Warning,
+                $"Modalità del robot: {Labels.Of(status.OperationalStatus)}.");
+
         var newState = RobotStateMachine.Derive(status, _pauseLatched);
         if (newState != _state)
         {
@@ -412,6 +422,10 @@ public sealed class RobotWorker(
                 ? EventLevel.Warning
                 : EventLevel.Info;
             AddEvent(level, $"Stato {Labels.Of(_state)} -> {Labels.Of(newState)}");
+            // The fault is over (cleared, or link lost): its message no longer applies.
+            if (_state is RobotServiceState.Fault or RobotServiceState.EStop
+                && newState is not (RobotServiceState.Fault or RobotServiceState.EStop))
+                _robotFault = null;
         }
 
         _state = newState;
@@ -439,6 +453,7 @@ public sealed class RobotWorker(
             CompletedCycles = _completedCycles,
             LastCycleTime = _lastCycle?.Outcome == CycleOutcome.Completed ? _lastCycle.Duration : null,
             LastError = _lastError,
+            RobotFault = _robotFault,
             LoopRateHz = _loopRateHz,
         });
     }

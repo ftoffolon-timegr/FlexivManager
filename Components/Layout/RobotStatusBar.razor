@@ -6,6 +6,19 @@
 @* Robot state always visible in the top bar. Read-only: it only reads the snapshot. *@
 <div class="status-bar">
     <span class="badge fs-6 @RobotStateStyle.BadgeClass(_snapshot.State)">@RobotStateStyle.Label(_snapshot.State)</span>
+    @* Auto (Remote) is required for any command from this service. Shown only when the robot tells it. *@
+    @if (_snapshot.Status.RemoteMode == RemoteMode.NotRemote)
+    {
+        <span class="badge text-bg-danger" title="Seleziona Auto (Remote) sul robot: senza, il robot non accetta comandi.">
+            <i class="bi bi-hand-index-thumb" aria-hidden="true"></i> NON IN AUTO (REMOTE)
+        </span>
+    }
+    else if (_snapshot.Status.RemoteMode == RemoteMode.Remote)
+    {
+        <span class="badge text-bg-success" title="Il robot accetta i comandi di questo servizio.">
+            <i class="bi bi-broadcast" aria-hidden="true"></i> AUTO (REMOTE)
+        </span>
+    }
     <span class="plan">
         <i class="bi bi-diagram-3" aria-hidden="true"></i>
         @(_snapshot.CurrentPlan ?? "nessun plan")
@@ -61,6 +74,7 @@
         var stale = current.Sequence > 0 && Time.GetUtcNow() - current.Timestamp > StaleAfter;
         var changed = current.State != _snapshot.State
             || current.CurrentPlan != _snapshot.CurrentPlan
+            || current.Status.RemoteMode != _snapshot.Status.RemoteMode
             || stale != _stale;
         _snapshot = current;
         _stale = stale;

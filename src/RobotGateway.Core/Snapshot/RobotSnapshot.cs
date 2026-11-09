@@ -26,6 +26,12 @@ public sealed record RobotSnapshot
     public long CompletedCycles { get; init; }
     public TimeSpan? LastCycleTime { get; init; }
     public string? LastError { get; init; }
+
+    /// <summary>
+    /// Message of the last robot error (for a custom fault of a plan: the text written in the plan).
+    /// Kept until the robot leaves the fault / E-stop state.
+    /// </summary>
+    public string? RobotFault { get; init; }
     public double LoopRateHz { get; init; }
 
     public static RobotSnapshot Initial { get; } = new();

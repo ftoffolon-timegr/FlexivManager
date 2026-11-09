@@ -74,6 +74,7 @@ public sealed record StatusDto(
     bool Connected,
     bool Operational,
     OperationalStatus OperationalStatus,
+    RemoteMode RemoteMode,
     bool Fault,
     bool EStopReleased,
     bool Busy,
@@ -83,6 +84,7 @@ public sealed record StatusDto(
     CycleRecord? LastCycle,
     long CompletedCycles,
     string? LastError,
+    string? RobotFault,
     double LoopRateHz)
 {
     public static StatusDto From(RobotSnapshot s, DateTimeOffset now) => new(
@@ -94,6 +96,7 @@ public sealed record StatusDto(
         s.Status.Connected,
         s.Status.Operational,
         s.Status.OperationalStatus,
+        s.Status.RemoteMode,
         s.Status.Fault,
         s.Status.EStopReleased,
         s.Status.Busy,
@@ -103,6 +106,7 @@ public sealed record StatusDto(
         s.LastCycle,
         s.CompletedCycles,
         s.LastError,
+        s.RobotFault,
         Math.Round(s.LoopRateHz, 1));
 }
 

@@ -214,6 +214,21 @@ public sealed class RobotWorkerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CustomFault_ShowsThePlanMessage_UntilCleared()
+    {
+        await EnableAsync();
+        await Started("LONG");
+
+        _robot.InjectFault("[316013] An error occurred while running the parallel program: [errore aria]. - Clear the fault.");
+        var fault = await WaitFor(s => s.State == RobotServiceState.Fault && s.RobotFault is not null, "custom fault");
+        Assert.Equal("errore aria", fault.RobotFault);
+        Assert.Contains("errore aria", (await CycleEnded()).LastCycle!.Message);
+
+        await Send(new ClearFaultCommand());
+        Assert.Null((await WaitForStateAsync(RobotServiceState.Connected)).RobotFault);
+    }
+
+    [Fact]
     public async Task Stop_EndsTheCycleAsStopped()
     {
         await EnableAsync();

@@ -11,6 +11,29 @@ public readonly record struct BackendStatus(
     RobotMode Mode)
 {
     public static BackendStatus Disconnected => default;
+
+    /// <summary>
+    /// Whether the robot is in Auto (Remote), the only mode in which it accepts RDK commands.
+    /// The RDK has no direct flag: OperationalStatus reports IN_MANUAL_MODE / IN_AUTO_MODE ("need to switch to
+    /// Auto (Remote)"), while READY implies Auto (Remote). Other statuses (not enabled, fault, ...) hide the mode.
+    /// </summary>
+    public RemoteMode RemoteMode =>
+        !Connected ? RemoteMode.Unknown
+        : OperationalStatus is OperationalStatus.InManualMode or OperationalStatus.InAutoMode ? RemoteMode.NotRemote
+        : Operational || OperationalStatus == OperationalStatus.Ready ? RemoteMode.Remote
+        : RemoteMode.Unknown;
+}
+
+public enum RemoteMode
+{
+    /// <summary>Not connected, or the robot reports another cause first (not enabled, fault, E-stop...).</summary>
+    Unknown,
+
+    /// <summary>Auto (Remote): commands from this service are accepted.</summary>
+    Remote,
+
+    /// <summary>Manual or regular Auto: switch to Auto (Remote) on the robot.</summary>
+    NotRemote,
 }
 
 /// <summary>

@@ -102,6 +102,31 @@
                 <div class="small text-muted mt-2">@StartHint(s, running, onRobot, repeat)</div>
             }
 
+            @if (s.Status.RemoteMode == RemoteMode.NotRemote)
+            {
+                <div class="alert alert-danger mt-3 mb-0" role="alert">
+                    <div class="fs-4 fw-bold">
+                        <i class="bi bi-hand-index-thumb" aria-hidden="true"></i> Robot non in Auto (Remote)
+                    </div>
+                    <div class="small">Il robot è @Labels.Of(s.Status.OperationalStatus). Seleziona Auto (Remote) sul robot: senza, START e i comandi non funzionano.</div>
+                </div>
+            }
+
+            @if (s.State is RobotServiceState.Fault or RobotServiceState.EStop)
+            {
+                <div class="alert alert-danger mt-3 mb-0" role="alert">
+                    <div class="fs-4 fw-bold">
+                        <i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i>
+                        @RobotStateStyle.Label(s.State)@(s.RobotFault is null ? "" : ": ")@s.RobotFault
+                    </div>
+                    <div class="small">
+                        @(s.State == RobotServiceState.EStop
+                            ? "Rilascia l'arresto di emergenza, poi premi Abilita."
+                            : "Elimina la causa, poi premi Reset anomalia e Abilita.")
+                    </div>
+                </div>
+            }
+
             @if (s.ActiveCycle is { } cycle)
             {
                 <div class="alert alert-primary py-2 mt-3 mb-0">
@@ -452,6 +477,7 @@
         running ? "Lavorazione in corso. STOP ferma subito il robot."
         : _selectedJob is null ? "Leggi un codice per abilitare START."
         : !onRobot ? $"Il plan {_selectedJob.PlanName} non è salvato su questo robot: START è disattivato."
+        : s.Status.RemoteMode == RemoteMode.NotRemote ? "START richiede il robot in Auto (Remote)."
         : s.State != RobotServiceState.Operational ? $"START richiede lo stato PRONTO (ora {RobotStateStyle.Label(s.State)})."
         : repeat ? $"Pronto: START esegue il prossimo pezzo di {_selectedJob.ProductCode}."
         : "Pronto: START chiede conferma prima del primo pezzo.";

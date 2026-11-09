@@ -31,7 +31,8 @@
             <tbody>
                 <tr><th>Connesso</th><td>@YesNo(s.Status.Connected)</td></tr>
                 <tr><th>Operativo</th><td>@YesNo(s.Status.Operational)</td></tr>
-                <tr><th>Stato operativo</th><td>@s.Status.OperationalStatus</td></tr>
+                <tr><th>Stato operativo</th><td>@Labels.Of(s.Status.OperationalStatus)</td></tr>
+                <tr><th>Auto (Remote)</th><td class="@(s.Status.RemoteMode == RemoteMode.NotRemote ? "text-danger fw-bold" : "")">@Labels.Of(s.Status.RemoteMode)</td></tr>
                 <tr><th>Modalità</th><td>@s.Status.Mode</td></tr>
                 <tr><th>Occupato</th><td>@YesNo(s.Status.Busy)</td></tr>
                 <tr><th>Anomalia</th><td class="@(s.Status.Fault ? "text-danger fw-bold" : "")">@YesNo(s.Status.Fault)</td></tr>

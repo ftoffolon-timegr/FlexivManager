@@ -38,12 +38,12 @@ public sealed class FlexivBackend(FlexivBackendOptions options) : IRobotBackend
         try
         {
             _robot = new Rdk.Robot(options.SerialNumber.Trim(), options.NetworkInterfaces, options.Verbose, lite: false);
-        /*    var plans = _robot.plan_list();
+            var plans = _robot.plan_list();
             int i = 0;
             foreach (var item in plans)
             {
                 i++;
-            }*/
+            }
         }
         catch (Exception ex) when (ex is not RobotBackendException)
         {

@@ -36,6 +36,29 @@ public static class Labels
         _ => outcome.ToString(),
     };
 
+    public static string Of(RemoteMode mode) => mode switch
+    {
+        RemoteMode.Remote => "Auto (Remote)",
+        RemoteMode.NotRemote => "non in Auto (Remote)",
+        _ => "non verificabile",
+    };
+
+    public static string Of(OperationalStatus status) => status switch
+    {
+        OperationalStatus.Ready => "pronto",
+        OperationalStatus.Booting => "avvio in corso",
+        OperationalStatus.EStopNotReleased => "E-stop non rilasciato",
+        OperationalStatus.NotEnabled => "non abilitato",
+        OperationalStatus.ReleasingBrake => "rilascio freni in corso",
+        OperationalStatus.MinorFault => "anomalia lieve",
+        OperationalStatus.CriticalFault => "anomalia critica",
+        OperationalStatus.InReducedState => "stato ridotto",
+        OperationalStatus.InRecoveryState => "stato di recupero",
+        OperationalStatus.InManualMode => "in Manuale: serve Auto (Remote)",
+        OperationalStatus.InAutoMode => "in Auto: serve Auto (Remote)",
+        _ => "sconosciuto",
+    };
+
     public static string Of(OrderStatus status) => status switch
     {
         OrderStatus.Pending => "da iniziare",
