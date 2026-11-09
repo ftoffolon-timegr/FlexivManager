@@ -112,6 +112,24 @@ if (-not (Test-Path $rdkSrc)) {
 $depsMarker = Join-Path $install "deps-installed.txt"
 if (-not (Test-Path $depsMarker) -and -not (Test-Path (Join-Path $install "lib\cmake\fastrtps"))) {
     Step "Building RDK dependencies into $install (several minutes)"
+
+    # Boost 1.83 (RDK 1.9.0-1.9.3) predates Visual Studio 2026: its bootstrap reports "Unknown toolset: vcunk".
+    # - bootstrap: guess_toolset.bat checks VS170COMNTOOLS before the unknown version, so point it at this VS
+    #   (config_toolset.bat then runs its vcvarsall.bat and builds the b2 engine as vc143);
+    # - b2: msvc.jam does not detect VS 18 through vswhere and falls back to cl.exe in PATH, so the build runs
+    #   inside an initialized x64 developer environment.
+    if (Test-Path (Join-Path $rdkSrc "thirdparty\scripts\install_boost.sh")) {
+        $env:VS170COMNTOOLS = Join-Path $vs "Common7\Tools\"
+        $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+        $env:PATH = "$(Split-Path $vswhere -Parent);$env:PATH"   # vcvars64.bat looks for vswhere.exe in PATH
+        Write-Host "Boost: VS170COMNTOOLS=$env:VS170COMNTOOLS, x64 developer environment from $vcvars"
+        & cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
+            if ($_ -match "^([^=]+)=(.*)$") { Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2] }
+        }
+        if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { throw "cl.exe not found after $vcvars." }
+        # Our CMake must stay first in PATH (vcvars puts its own copy there too, which is the same one).
+        $env:PATH = "$cmakeBin;$env:PATH"
+    }
     $cloned = Join-Path $rdkSrc "thirdparty\cloned"
     for ($attempt = 1; ; $attempt++) {
         # A clone interrupted by a network error leaves a repository without commits, which makes the
